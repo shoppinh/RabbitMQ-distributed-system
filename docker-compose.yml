@@ -1,0 +1,98 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    hostname: rabbitmq
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  order-service:
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile
+    container_name: order-service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      PORT: 3000
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      ORDER_EXCHANGE: order_exchange
+    ports:
+      - '3000:3000'
+    restart: unless-stopped
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
+    container_name: payment-service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      ORDER_EXCHANGE: order_exchange
+      PREFETCH_COUNT: 1
+      RETRY_DELAY_MS: 5000
+      MAX_RETRIES: 3
+      PAYMENT_QUEUE: payment_queue
+      PAYMENT_RETRY_QUEUE: payment_retry_queue
+      PAYMENT_DLQ: payment_dlq
+      PAYMENT_FAILURE_RATE: 0.5
+      PAYMENT_PROCESSING_MS: 600
+    restart: unless-stopped
+
+  inventory-service:
+    build:
+      context: .
+      dockerfile: inventory-service/Dockerfile
+    container_name: inventory-service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      ORDER_EXCHANGE: order_exchange
+      PREFETCH_COUNT: 1
+      RETRY_DELAY_MS: 5000
+      MAX_RETRIES: 3
+      INVENTORY_QUEUE: inventory_queue
+      INVENTORY_RETRY_QUEUE: inventory_retry_queue
+      INVENTORY_DLQ: inventory_dlq
+      INVENTORY_PROCESSING_MS: 300
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    container_name: notification-service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      ORDER_EXCHANGE: order_exchange
+      PREFETCH_COUNT: 1
+      RETRY_DELAY_MS: 5000
+      MAX_RETRIES: 3
+      NOTIFICATION_QUEUE: notification_queue
+      NOTIFICATION_RETRY_QUEUE: notification_retry_queue
+      NOTIFICATION_DLQ: notification_dlq
+      NOTIFICATION_PROCESSING_MS: 250
+    restart: unless-stopped
+
+volumes:
+  rabbitmq_data:

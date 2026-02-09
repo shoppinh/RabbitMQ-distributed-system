@@ -1,0 +1,19 @@
+{
+  "name": "rabbitmq-order-processing-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Event-driven Order Processing System with Node.js and RabbitMQ",
+  "scripts": {
+    "start:order": "node order-service/index.js",
+    "start:payment": "node payment-service/index.js",
+    "start:inventory": "node inventory-service/index.js",
+    "start:notification": "node notification-service/index.js"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.4",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.18.0",
+    "uuid": "^13.0.0"
+  }
+}
