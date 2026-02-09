@@ -8,6 +8,7 @@ A complete backend microservice project that implements an event-driven order fl
 - **Payment Service** (`payment-service`) - Consumer with random failure simulation
 - **Inventory Service** (`inventory-service`) - Consumer that reserves stock
 - **Notification Service** (`notification-service`) - Consumer that sends notifications
+- **Outbox Publisher** (`outbox-publisher`) - Polls DB events and publishes to RabbitMQ
 - **Shared module** (`shared`) - RabbitMQ connection manager, topology helpers, messaging helpers, env config, in-memory idempotency store
 
 ## Architecture Highlights
@@ -79,7 +80,7 @@ Message path:
 npm install
 ```
 
-2. Start full stack (RabbitMQ + all microservices):
+2. Start full stack (Postgres + migrator + RabbitMQ + microservices):
 
 ```bash
 docker compose up -d
@@ -90,6 +91,40 @@ Credentials: `guest / guest`
 
 Order Service API: `http://localhost:3000`
 
+3. Check migration status:
+
+```bash
+docker compose logs db-migrator
+```
+
+You should see `[migrate] done`.
+
+## Database Schema and Migrations
+
+Migrations live in `database/migrations` and are applied by `scripts/migrate.js`.
+
+Applied migrations are tracked in table `schema_migrations`.
+
+Initial migration creates:
+
+- `orders`
+  - `id UUID PRIMARY KEY`
+  - `items JSONB NOT NULL DEFAULT '[]'`
+  - `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+- `events`
+  - `id UUID PRIMARY KEY`
+  - `type TEXT NOT NULL`
+  - `payload JSONB NOT NULL`
+  - `published BOOLEAN NOT NULL DEFAULT FALSE`
+  - `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+  - `published_at TIMESTAMPTZ NULL`
+
+Run migrations manually:
+
+```bash
+npm run migrate
+```
+
 ## Run Services Manually (Alternative)
 
 If you prefer local Node processes instead of service containers, run each service in its own terminal from project root:
@@ -99,6 +134,7 @@ node order-service/index.js
 node payment-service/index.js
 node inventory-service/index.js
 node notification-service/index.js
+node outbox-publisher/index.js
 ```
 
 Order Service API runs on `http://localhost:3000`.
@@ -197,7 +233,5 @@ MAX_RETRIES=2 PAYMENT_FAILURE_RATE=1 node payment-service/index.js
 
 ## Notes
 
-- No database persistence in this phase.
-- No transactional outbox pattern implemented.
 - No saga orchestration.
 - No Kafka/streaming system usage.

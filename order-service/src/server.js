@@ -1,5 +1,4 @@
 const express = require("express");
-const crypto = require("crypto");
 const { v4: uuidv4 } = require("uuid");
 
 const { getCommonConfig } = require("../../shared/config/env");
@@ -7,8 +6,6 @@ const {
   createChannel,
   closeConnection,
 } = require("../../shared/rabbitmq/connection");
-const { setupOrderPublisher } = require("../../shared/rabbitmq/topology");
-const { publishJson } = require("../../shared/rabbitmq/message");
 const { pool } = require("../../shared/config/db");
 
 async function startServer(logger) {
@@ -22,12 +19,6 @@ async function startServer(logger) {
     rabbitmqUrl: config.rabbitmqUrl,
     logger,
     serviceName: config.serviceName,
-  });
-
-  await setupOrderPublisher(channel, config.orderExchange);
-
-  logger.info("Order publisher initialized", {
-    exchange: config.orderExchange,
   });
 
   app.get("/health", (_, res) => {
@@ -58,12 +49,12 @@ async function startServer(logger) {
 
         await client.query("INSERT INTO orders (id, items) VALUES ($1, $2)", [
           orderId,
-          req.body.items,
+          JSON.stringify(Array.isArray(req.body.items) ? req.body.items : []),
         ]);
 
         await client.query(
           "INSERT INTO events (id, type, payload) VALUES ($1, $2, $3)",
-          [eventId, "OrderCreated", event],
+          [eventId, "OrderCreated", JSON.stringify(event)],
         );
 
         await client.query("COMMIT");

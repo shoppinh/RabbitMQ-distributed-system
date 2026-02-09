@@ -4,6 +4,7 @@
   "private": true,
   "description": "Event-driven Order Processing System with Node.js and RabbitMQ",
   "scripts": {
+    "migrate": "node scripts/migrate.js",
     "start:order": "node order-service/index.js",
     "start:payment": "node payment-service/index.js",
     "start:inventory": "node inventory-service/index.js",

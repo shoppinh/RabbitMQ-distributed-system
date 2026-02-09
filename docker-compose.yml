@@ -1,4 +1,39 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: orders_db
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d orders_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db-migrator:
+    image: node:20-alpine
+    container_name: db-migrator
+    working_dir: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: orders_db
+    volumes:
+      - .:/app
+    command: sh -c "npm install --omit=dev && npm run migrate"
+    restart: "no"
+
   rabbitmq:
     image: rabbitmq:3.13-management
     container_name: rabbitmq
@@ -23,12 +58,19 @@ services:
       dockerfile: order-service/Dockerfile
     container_name: order-service
     depends_on:
+      db-migrator:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
     environment:
       PORT: 3000
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order_exchange
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: orders_db
     ports:
       - '3000:3000'
     restart: unless-stopped
@@ -39,6 +81,8 @@ services:
       dockerfile: payment-service/Dockerfile
     container_name: payment-service
     depends_on:
+      db-migrator:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
     environment:
@@ -60,6 +104,8 @@ services:
       dockerfile: inventory-service/Dockerfile
     container_name: inventory-service
     depends_on:
+      db-migrator:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
     environment:
@@ -80,6 +126,8 @@ services:
       dockerfile: notification-service/Dockerfile
     container_name: notification-service
     depends_on:
+      db-migrator:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
     environment:
@@ -100,13 +148,23 @@ services:
       dockerfile: outbox-publisher/Dockerfile
     container_name: outbox-publisher
     depends_on:
+      db-migrator:
+        condition: service_completed_successfully
       rabbitmq:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order_exchange
       OUTBOX_POLL_INTERVAL_MS: 2000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: orders_db
     restart: unless-stopped
 
 volumes:
   rabbitmq_data:
+  postgres_data:

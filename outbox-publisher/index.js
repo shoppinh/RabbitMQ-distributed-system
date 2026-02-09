@@ -48,7 +48,7 @@ async function init() {
     try {
       await client.query("BEGIN");
       const result = await client.query(
-        `SELECT * FROM outbox_events
+        `SELECT * FROM events
          WHERE published = false
          ORDER BY created_at
          LIMIT 10
@@ -60,13 +60,13 @@ async function init() {
       }
 
       for (const event of result.rows) {
-        await publishJsonConfirmed(channel, config.orderExchange, "", event, {
+        await publishJsonConfirmed(channel, config.orderExchange, "", event.payload, {
           messageId: event.id,
           type: "OrderCreated",
         });
 
         await client.query(
-          "UPDATE outbox_events SET published = true WHERE id = $1",
+          "UPDATE events SET published = true, published_at = NOW() WHERE id = $1",
           [event.id],
         );
 
