@@ -96,7 +96,10 @@ async function startConsumerService(config) {
         return;
       }
 
-      if (eventStore.has(event.eventId)) {
+      // Try to acquire processing lock atomically
+      const isFirstSeen = await eventStore.tryAcquire(event.eventId);
+      
+      if (!isFirstSeen) {
         logger.warn('Duplicate event detected; ACK without processing', {
           eventId: event.eventId,
           orderId: event.orderId
@@ -112,7 +115,6 @@ async function startConsumerService(config) {
           logger
         });
 
-        eventStore.add(event.eventId);
         channel.ack(msg);
 
         logger.info('Event processed successfully', {

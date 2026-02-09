@@ -1,5 +1,5 @@
 const { getCommonConfig } = require('../../shared/config/env');
-const { InMemoryEventStore } = require('../../shared/idempotency/eventStore');
+const { DatabaseEventStore } = require('../../shared/idempotency/eventStore');
 const { startConsumerService } = require('../../shared/rabbitmq/consumerService');
 
 function parseNumber(value, fallback) {
@@ -21,7 +21,7 @@ async function startWorker(logger) {
   };
 
   const processingMs = parseNumber(process.env.INVENTORY_PROCESSING_MS, 300);
-  const eventStore = new InMemoryEventStore(parseNumber(process.env.IDEMPOTENCY_CACHE_SIZE, 10000));
+  const eventStore = new DatabaseEventStore(common.serviceName);
 
   logger.info('Inventory worker configuration loaded', {
     queueNames,
