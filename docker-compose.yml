@@ -94,5 +94,19 @@ services:
       NOTIFICATION_PROCESSING_MS: 250
     restart: unless-stopped
 
+  outbox-publisher:
+    build:
+      context: .
+      dockerfile: outbox-publisher/Dockerfile
+    container_name: outbox-publisher
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      ORDER_EXCHANGE: order_exchange
+      OUTBOX_POLL_INTERVAL_MS: 2000
+    restart: unless-stopped
+
 volumes:
   rabbitmq_data:

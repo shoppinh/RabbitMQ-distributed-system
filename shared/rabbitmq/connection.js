@@ -52,6 +52,11 @@ async function createChannel(config) {
   return conn.createChannel();
 }
 
+async function createConfirmChannel(config) {
+  const conn = await getConnection(config);
+  return conn.createConfirmChannel();
+}
+
 async function closeConnection(logger, serviceName) {
   if (!connection) {
     return;
@@ -69,5 +74,6 @@ async function closeConnection(logger, serviceName) {
 module.exports = {
   getConnection,
   createChannel,
+  createConfirmChannel,
   closeConnection
 };

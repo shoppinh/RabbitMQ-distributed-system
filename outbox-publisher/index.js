@@ -7,16 +7,21 @@ const { createLogger } = require("../shared/utils/logger");
 const { closeConnection } = require("../shared/rabbitmq/connection");
 const { setupOutboxPublisher } = require("../shared/rabbitmq/topology");
 const { getCommonConfig } = require("../shared/config/env");
-const { createChannel } = require("../shared/rabbitmq/channel");
-const { pool } = require("../shared/database/pool");
-const { publishJson } = require("../shared/rabbitmq/message");
+const { createConfirmChannel } = require("../shared/rabbitmq/connection");
+const { pool } = require("../shared/config/db");
+const { publishJsonConfirmed } = require("../shared/rabbitmq/message");
 
-const serviceName = "inventory-service";
+const serviceName = "outbox-publisher";
 const logger = createLogger(serviceName);
+const POLL_INTERVAL_MS = Number(process.env.OUTBOX_POLL_INTERVAL_MS || 1000);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function init() {
   const config = getCommonConfig("outbox-publisher");
-  const channel = await createChannel({
+  const channel = await createConfirmChannel({
     rabbitmqUrl: config.rabbitmqUrl,
     logger,
     serviceName: config.serviceName,
@@ -38,6 +43,7 @@ async function init() {
 
   while (true) {
     const client = await pool.connect();
+    let shouldSleep = false;
 
     try {
       await client.query("BEGIN");
@@ -49,8 +55,12 @@ async function init() {
          FOR UPDATE SKIP LOCKED`,
       );
 
+      if (result.rows.length === 0) {
+        shouldSleep = true;
+      }
+
       for (const event of result.rows) {
-        publishJson(channel, config.orderExchange, "", event, {
+        await publishJsonConfirmed(channel, config.orderExchange, "", event, {
           messageId: event.id,
           type: "OrderCreated",
         });
@@ -66,12 +76,16 @@ async function init() {
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
-      logger.error("Failed to start outbox publisher", {
+      logger.error("Outbox publish loop failed; retrying", {
         error: error.message,
       });
-      process.exit(1);
+      shouldSleep = true;
     } finally {
       client.release();
+    }
+
+    if (shouldSleep) {
+      await sleep(POLL_INTERVAL_MS);
     }
   }
 }

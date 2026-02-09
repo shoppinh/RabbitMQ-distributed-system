@@ -8,6 +8,36 @@ function publishJson(channel, exchange, routingKey, message, properties = {}) {
   });
 }
 
+async function publishJsonConfirmed(
+  channel,
+  exchange,
+  routingKey,
+  message,
+  properties = {}
+) {
+  const body = Buffer.from(JSON.stringify(message));
+
+  await new Promise((resolve, reject) => {
+    channel.publish(
+      exchange,
+      routingKey,
+      body,
+      {
+        persistent: true,
+        contentType: 'application/json',
+        ...properties
+      },
+      (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      }
+    );
+  });
+}
+
 function parseJsonMessage(msg) {
   if (!msg) {
     return null;
@@ -51,6 +81,7 @@ function publishToDlq(channel, dlqQueue, msg, meta = {}) {
 
 module.exports = {
   publishJson,
+  publishJsonConfirmed,
   parseJsonMessage,
   getRejectCount,
   publishToDlq

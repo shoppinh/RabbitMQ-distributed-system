@@ -21,7 +21,7 @@ function getDatabaseConfig() {
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'password',
     database: process.env.DB_NAME || 'orders_db',
-    maxPoolSize: parseNumber(process.env.DB_MAX_POOL_SIZE, 10)
+    max: parseNumber(process.env.DB_MAX_POOL_SIZE, 10)
   };
 }
 
