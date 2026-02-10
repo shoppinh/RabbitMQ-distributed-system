@@ -1,7 +1,4 @@
-function parseNumber(value, fallback) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
+const { parseNumber } = require("../utils/parseNumber");
 
 function getCommonConfig(serviceName) {
   return {

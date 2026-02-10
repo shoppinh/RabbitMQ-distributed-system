@@ -1,4 +1,4 @@
-const path = require("path");
+const path = require("node:path");
 const dotenv = require("dotenv");
 
 dotenv.config({ path: path.join(__dirname, ".env") });
@@ -60,10 +60,16 @@ async function init() {
       }
 
       for (const event of result.rows) {
-        await publishJsonConfirmed(channel, config.orderExchange, "", event.payload, {
-          messageId: event.id,
-          type: "OrderCreated",
-        });
+        await publishJsonConfirmed(
+          channel,
+          config.orderExchange,
+          "",
+          event.payload,
+          {
+            messageId: event.id,
+            type: "OrderCreated",
+          },
+        );
 
         await client.query(
           "UPDATE events SET published = true, published_at = NOW() WHERE id = $1",

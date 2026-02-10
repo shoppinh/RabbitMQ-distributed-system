@@ -1,34 +1,31 @@
-const fs = require('fs');
-const path = require('path');
-const { Pool } = require('pg');
+const fs = require("node:fs");
+const path = require("node:path");
+const { Pool } = require("pg");
 
-function parseNumber(value, fallback) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
+const { parseNumber } = require("../shared/utils/parseNumber");
 
 function getMigrationFiles(dirPath) {
   return fs
     .readdirSync(dirPath)
-    .filter((file) => file.endsWith('.sql'))
+    .filter((file) => file.endsWith(".sql"))
     .sort();
 }
 
 async function main() {
-  const migrationsDir = path.join(__dirname, '..', 'database', 'migrations');
+  const migrationsDir = path.join(__dirname, "..", "database", "migrations");
 
   const pool = new Pool({
-    host: process.env.DB_HOST || 'localhost',
+    host: process.env.DB_HOST || "localhost",
     port: parseNumber(process.env.DB_PORT, 5432),
-    user: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'password',
-    database: process.env.DB_NAME || 'orders_db'
+    user: process.env.DB_USER || "postgres",
+    password: process.env.DB_PASSWORD || "password",
+    database: process.env.DB_NAME || "orders_db",
   });
 
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -41,8 +38,8 @@ async function main() {
 
     for (const file of migrationFiles) {
       const alreadyApplied = await client.query(
-        'SELECT 1 FROM schema_migrations WHERE version = $1',
-        [file]
+        "SELECT 1 FROM schema_migrations WHERE version = $1",
+        [file],
       );
 
       if (alreadyApplied.rowCount > 0) {
@@ -50,20 +47,20 @@ async function main() {
         continue;
       }
 
-      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+      const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
       console.log(`[migrate] apply ${file}`);
       await client.query(sql);
       await client.query(
-        'INSERT INTO schema_migrations (version) VALUES ($1)',
-        [file]
+        "INSERT INTO schema_migrations (version) VALUES ($1)",
+        [file],
       );
     }
 
-    await client.query('COMMIT');
-    console.log('[migrate] done');
+    await client.query("COMMIT");
+    console.log("[migrate] done");
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('[migrate] failed', error);
+    await client.query("ROLLBACK");
+    console.error("[migrate] failed", error);
     process.exitCode = 1;
   } finally {
     client.release();
@@ -71,7 +68,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('[migrate] fatal', error);
-  process.exit(1);
-});
+(async () => {
+  try {
+    await main();
+  } catch (error) {
+    console.error("[migrate] fatal", error);
+    process.exit(1);
+  }
+})();

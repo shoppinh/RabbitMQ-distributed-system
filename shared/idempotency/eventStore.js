@@ -1,6 +1,4 @@
-const { pool } = require('../config/db');
-
-
+const { pool } = require("../config/db");
 
 class DatabaseEventStore {
   constructor(serviceName) {
@@ -16,8 +14,8 @@ class DatabaseEventStore {
     const client = await pool.connect();
     try {
       const result = await client.query(
-        'INSERT INTO processed_events (event_id, service_name) VALUES ($1, $2) ON CONFLICT (event_id) DO NOTHING',
-        [eventId, this.serviceName]
+        "INSERT INTO processed_events (event_id, service_name) VALUES ($1, $2) ON CONFLICT (event_id) DO NOTHING",
+        [eventId, this.serviceName],
       );
       // If rowCount > 0, the insert succeeded (first time seeing this event)
       // If rowCount = 0, conflict occurred (duplicate event)
@@ -29,5 +27,5 @@ class DatabaseEventStore {
 }
 
 module.exports = {
-  DatabaseEventStore
+  DatabaseEventStore,
 };

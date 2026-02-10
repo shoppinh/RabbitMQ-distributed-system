@@ -1,28 +1,30 @@
-const path = require('path');
-const dotenv = require('dotenv');
+const path = require("node:path");
+const dotenv = require("dotenv");
 
-dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config({ path: path.join(__dirname, ".env") });
 
-const { createLogger } = require('../shared/utils/logger');
-const { startWorker } = require('./src/worker');
-const { closeConnection } = require('../shared/rabbitmq/connection');
+const { createLogger } = require("../shared/utils/logger");
+const { startWorker } = require("./src/worker");
+const { closeConnection } = require("../shared/rabbitmq/connection");
 
-const serviceName = 'inventory-service';
+const serviceName = "inventory-service";
 const logger = createLogger(serviceName);
 
 let runtime;
 
-startWorker(logger)
-  .then((startedRuntime) => {
-    runtime = startedRuntime;
-  })
-  .catch((error) => {
-    logger.error('Failed to start inventory worker', { error: error.message });
+(async () => {
+  try {
+    runtime = await startWorker(logger);
+  } catch (error) {
+    logger.error("Failed to start inventory worker", {
+      error: error.message,
+    });
     process.exit(1);
-  });
+  }
+})();
 
 const shutdown = async () => {
-  logger.warn('Inventory service shutdown requested');
+  logger.warn("Inventory service shutdown requested");
   if (runtime) {
     await runtime.stop();
   }
@@ -30,5 +32,5 @@ const shutdown = async () => {
   process.exit(0);
 };
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

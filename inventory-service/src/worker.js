@@ -1,31 +1,30 @@
-const { getCommonConfig } = require('../../shared/config/env');
-const { DatabaseEventStore } = require('../../shared/idempotency/eventStore');
-const { startConsumerService } = require('../../shared/rabbitmq/consumerService');
+const { getCommonConfig } = require("../../shared/config/env");
+const { DatabaseEventStore } = require("../../shared/idempotency/eventStore");
+const {
+  startConsumerService,
+} = require("../../shared/rabbitmq/consumerService");
 
-function parseNumber(value, fallback) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
+const { parseNumber } = require("../../shared/utils/parseNumber");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function startWorker(logger) {
-  const common = getCommonConfig('inventory-service');
+  const common = getCommonConfig("inventory-service");
 
   const queueNames = {
-    main: process.env.INVENTORY_QUEUE || 'inventory_queue',
-    retry: process.env.INVENTORY_RETRY_QUEUE || 'inventory_retry_queue',
-    dlq: process.env.INVENTORY_DLQ || 'inventory_dlq'
+    main: process.env.INVENTORY_QUEUE || "inventory_queue",
+    retry: process.env.INVENTORY_RETRY_QUEUE || "inventory_retry_queue",
+    dlq: process.env.INVENTORY_DLQ || "inventory_dlq",
   };
 
   const processingMs = parseNumber(process.env.INVENTORY_PROCESSING_MS, 300);
   const eventStore = new DatabaseEventStore(common.serviceName);
 
-  logger.info('Inventory worker configuration loaded', {
+  logger.info("Inventory worker configuration loaded", {
     queueNames,
-    processingMs
+    processingMs,
   });
 
   return startConsumerService({
@@ -39,22 +38,22 @@ async function startWorker(logger) {
     maxRetries: common.maxRetries,
     eventStore,
     processEvent: async (event) => {
-      logger.info('Reserving stock', {
+      logger.info("Reserving stock", {
         eventId: event.eventId,
         orderId: event.orderId,
-        items: event.payload.items
+        items: event.payload.items,
       });
 
       await sleep(processingMs);
 
-      logger.info('Stock reserved', {
+      logger.info("Stock reserved", {
         eventId: event.eventId,
-        orderId: event.orderId
+        orderId: event.orderId,
       });
-    }
+    },
   });
 }
 
 module.exports = {
-  startWorker
+  startWorker,
 };
