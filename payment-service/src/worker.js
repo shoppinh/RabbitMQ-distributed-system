@@ -107,7 +107,7 @@ async function handleOrderCreated(event, client, logger, failureRate, processing
   await sleep(processingMs);
 
   if (shouldFail(failureRate)) {
-    // Payment failed
+    // Payment failed — commit the failure so the outbox event is published
     await client.query(
       "UPDATE payment_transactions SET status = $1, processed_at = NOW() WHERE id = $2",
       ["failed", paymentId]
@@ -132,7 +132,7 @@ async function handleOrderCreated(event, client, logger, failureRate, processing
       paymentId,
     });
 
-    throw new Error("Simulated payment gateway failure");
+    return;
   }
 
   // Payment succeeded

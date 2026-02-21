@@ -45,7 +45,7 @@ All events flow through a single **topic exchange** (`order.topic`). Each servic
 | order-service | `payment.*`, `inventory.*`, `payment.refunded` | `order.created`, `payment.refund.requested`, `order.confirmed`, `order.cancelled` |
 | payment-service | `order.created`, `payment.refund.requested` | `payment.completed`, `payment.failed`, `payment.refunded` |
 | inventory-service | `payment.completed` | `inventory.reserved`, `inventory.failed` |
-| notification-service | `order.confirmed`, `order.cancelled` | nothing |
+| notification-service | `order.confirmed`, `order.cancelled`, `payment.refunded` | nothing |
 
 ### Key components per service
 
