@@ -5,6 +5,10 @@ const { Pool } = require("pg");
 const { parseNumber } = require("../shared/utils/parseNumber");
 
 function getMigrationFiles(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    console.log(`[migrate] migrations directory does not exist: ${dirPath}`);
+    return [];
+  }
   return fs
     .readdirSync(dirPath)
     .filter((file) => file.endsWith(".sql"))
@@ -12,7 +16,9 @@ function getMigrationFiles(dirPath) {
 }
 
 async function main() {
-  const migrationsDir = path.join(__dirname, "..", "database", "migrations");
+  // Support MIGRATIONS_DIR env var for multi-service migrations
+  const defaultMigrationsDir = path.join(__dirname, "..", "database", "migrations");
+  const migrationsDir = process.env.MIGRATIONS_DIR || defaultMigrationsDir;
 
   const pool = new Pool({
     host: process.env.DB_HOST || "localhost",
@@ -27,6 +33,7 @@ async function main() {
   try {
     await client.query("BEGIN");
 
+    // Ensure schema_migrations table exists
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version TEXT PRIMARY KEY,
@@ -35,6 +42,10 @@ async function main() {
     `);
 
     const migrationFiles = getMigrationFiles(migrationsDir);
+
+    if (migrationFiles.length === 0) {
+      console.log(`[migrate] no migrations found in ${migrationsDir}`);
+    }
 
     for (const file of migrationFiles) {
       const alreadyApplied = await client.query(

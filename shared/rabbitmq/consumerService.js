@@ -7,7 +7,7 @@ function validateEvent(event) {
     return 'Event payload is missing or invalid JSON object';
   }
 
-  const requiredFields = ['eventId', 'orderId', 'timestamp', 'payload'];
+  const requiredFields = ['eventId', 'sagaId', 'orderId', 'timestamp', 'payload'];
 
   for (const field of requiredFields) {
     if (!event[field]) {
@@ -29,7 +29,8 @@ async function startConsumerService(config) {
     prefetchCount,
     maxRetries,
     eventStore,
-    processEvent
+    processEvent,
+    routingKeys = []
   } = config;
 
   const channel = await createChannel({ rabbitmqUrl, logger, serviceName });
@@ -39,7 +40,8 @@ async function startConsumerService(config) {
     mainQueue: queueNames.main,
     retryQueue: queueNames.retry,
     dlqQueue: queueNames.dlq,
-    retryDelayMs
+    retryDelayMs,
+    routingKeys
   });
 
   await channel.prefetch(prefetchCount);
@@ -107,6 +109,9 @@ async function startConsumerService(config) {
         channel.ack(msg);
         return;
       }
+
+      // Add routing key to event for routing
+      event.routingKey = msg.fields.routingKey;
 
       try {
         await processEvent(event, {

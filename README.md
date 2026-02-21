@@ -1,71 +1,98 @@
-# Event-Driven Order Processing System (Node.js + RabbitMQ)
+# Event-Driven Order Processing System with Choreography Saga Pattern
 
-A complete backend microservice project that implements an event-driven order flow using RabbitMQ fanout exchange broadcasting, retry queues, dead-letter queues, idempotent consumers, and horizontal worker scaling support.
+A complete backend microservice project implementing a **Choreography Saga Pattern** with **Outbox Pattern** for distributed transactions. Built with Node.js, RabbitMQ (topic exchange), and PostgreSQL.
+
+## Architecture Overview
+
+This system implements an order processing flow using **choreography-based saga pattern** where services communicate via events to coordinate distributed transactions.
+
+### Saga Flows
+
+**Happy Path:**
+```
+OrderCreated → PaymentCompleted → InventoryReserved → OrderConfirmed
+```
+
+**Payment Failure:**
+```
+OrderCreated → PaymentFailed → OrderCancelled
+```
+
+**Inventory Failure (Compensation):**
+```
+OrderCreated → PaymentCompleted → InventoryFailed → PaymentRefundRequested → PaymentRefunded → OrderCancelled
+```
+
+**Timeout (90 seconds):**
+```
+OrderCreated → [90s timeout] → OrderCancelled
+```
 
 ## Services
 
-- **Order Service** (`order-service`) - Producer API (`POST /orders`)
-- **Payment Service** (`payment-service`) - Consumer with random failure simulation
-- **Inventory Service** (`inventory-service`) - Consumer that reserves stock
-- **Notification Service** (`notification-service`) - Consumer that sends notifications
-- **Outbox Publisher** (`outbox-publisher`) - Polls DB events and publishes to RabbitMQ
-- **Shared module** (`shared`) - RabbitMQ connection manager, topology helpers, messaging helpers, env config, in-memory idempotency store
+| Service | Purpose | Database | Outbox Pattern |
+|---------|---------|----------|----------------|
+| **Order Service** | Saga coordinator, HTTP API | `order_db` | ✅ Yes |
+| **Payment Service** | Process payments & refunds | `payment_db` | ✅ Yes |
+| **Inventory Service** | Reserve stock | `inventory_db` | ✅ Yes |
+| **Notification Service** | Send emails (stateless) | None | ❌ No |
 
 ## Architecture Highlights
 
-- Node.js + Express + amqplib
-- Exchange: `order_exchange` (type `fanout`)
-- Main queues:
-  - `payment_queue`
-  - `inventory_queue`
-  - `notification_queue`
-- Per-service retry and DLQ queues:
-  - `payment_retry_queue`, `payment_dlq`
-  - `inventory_retry_queue`, `inventory_dlq`
-  - `notification_retry_queue`, `notification_dlq`
-- Consumer reliability:
-  - `prefetch(1)`
-  - retry with dead-letter routing + TTL
-  - DLQ fallback on permanent failure
-  - idempotent consumption via in-memory `eventId` tracking
-  - proper ACK / NACK behavior
-- Exactly one RabbitMQ connection per service process (singleton module)
-- Horizontal scaling by running multiple worker instances per service
+- **Exchange Type**: `topic` (not fanout) - enables selective event routing
+- **Exchange Name**: `order.topic`
+- **Outbox Pattern**: Each service with a database uses outbox for reliable event publishing
+- **Saga Timeout**: 90-second automatic cancellation for stuck sagas
+- **Compensation**: Automatic refund flow when inventory reservation fails
+- **Idempotency**: Per-event deduplication via `processed_events` table
+- **Exactly-once Publishing**: Confirm channels with publisher acknowledgments
+- **Retry & DLQ**: Per-service retry queues with TTL and dead-letter queues
 
 ## Event Contract
 
-Every published event includes:
+All events include:
 
 ```json
 {
   "eventId": "uuid",
+  "sagaId": "uuid",
   "orderId": "uuid",
   "timestamp": "ISO-8601",
-  "payload": {
-    "customerId": "string|null",
-    "customerEmail": "string|null",
-    "items": [],
-    "amount": 0,
-    "currency": "USD"
-  }
+  "payload": { ... }
 }
 ```
 
-## Retry Flow
+## Routing Keys
 
-Implemented using:
+| Event | Routing Key | Published By |
+|-------|-------------|--------------|
+| OrderCreated | `order.created` | Order Service |
+| PaymentCompleted | `payment.completed` | Payment Service |
+| PaymentFailed | `payment.failed` | Payment Service |
+| InventoryReserved | `inventory.reserved` | Inventory Service |
+| InventoryFailed | `inventory.failed` | Inventory Service |
+| PaymentRefundRequested | `payment.refund.requested` | Order Service |
+| PaymentRefunded | `payment.refunded` | Payment Service |
+| OrderConfirmed | `order.confirmed` | Order Service |
+| OrderCancelled | `order.cancelled` | Order Service |
 
-- `x-dead-letter-exchange`
-- `x-dead-letter-routing-key`
-- `x-message-ttl`
+## Database Schema
 
-Message path:
+### Order Service (`order_db`)
+- `orders` - Order data
+- `events` - Outbox table
+- `saga_instances` - Saga state tracking
+- `processed_events` - Idempotency
 
-1. Main queue receives event from fanout exchange
-2. Consumer processing fails -> `NACK(requeue=false)`
-3. Main queue dead-letters message to retry queue
-4. Retry queue TTL expires -> dead-letters message back to main queue
-5. If retries exceed `MAX_RETRIES`, consumer routes message to DLQ and ACKs original
+### Payment Service (`payment_db`)
+- `payment_transactions` - Payment state
+- `events` - Outbox table
+- `processed_events` - Idempotency
+
+### Inventory Service (`inventory_db`)
+- `inventory_reservations` - Reservation state
+- `events` - Outbox table
+- `processed_events` - Idempotency
 
 ## Prerequisites
 
@@ -74,72 +101,38 @@ Message path:
 
 ## Setup
 
-1. Install dependencies once at project root:
+1. **Install dependencies:**
 
 ```bash
 npm install
 ```
 
-2. Start full stack (Postgres + migrator + RabbitMQ + microservices):
+2. **Start full stack:**
 
 ```bash
 docker compose up -d
 ```
 
-RabbitMQ UI: `http://localhost:15672`  
-Credentials: `guest / guest`
+This starts:
+- PostgreSQL with 3 databases (order_db, payment_db, inventory_db)
+- RabbitMQ with management UI
+- Database migrators for each service
+- All microservices
 
-Order Service API: `http://localhost:3000`
+**RabbitMQ UI**: `http://localhost:15672` (guest/guest)  
+**Order Service API**: `http://localhost:3000`
 
-3. Check migration status:
-
-```bash
-docker compose logs db-migrator
-```
-
-You should see `[migrate] done`.
-
-## Database Schema and Migrations
-
-Migrations live in `database/migrations` and are applied by `scripts/migrate.js`.
-
-Applied migrations are tracked in table `schema_migrations`.
-
-Initial migration creates:
-
-- `orders`
-  - `id UUID PRIMARY KEY`
-  - `items JSONB NOT NULL DEFAULT '[]'`
-  - `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
-- `events`
-  - `id UUID PRIMARY KEY`
-  - `type TEXT NOT NULL`
-  - `payload JSONB NOT NULL`
-  - `published BOOLEAN NOT NULL DEFAULT FALSE`
-  - `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
-  - `published_at TIMESTAMPTZ NULL`
-
-Run migrations manually:
+3. **Check migration status:**
 
 ```bash
-npm run migrate
+docker compose logs db-migrator-order
+docker compose logs db-migrator-payment
+docker compose logs db-migrator-inventory
 ```
 
-## Run Services Manually (Alternative)
+You should see `[migrate] done` for each.
 
-If you prefer local Node processes instead of service containers, run each service in its own terminal from project root:
-
-```bash
-node order-service/index.js
-node payment-service/index.js
-node inventory-service/index.js
-node notification-service/index.js
-node outbox-publisher/index.js
-```
-
-Order Service API runs on `http://localhost:3000`.
-
-## Create an Order (Trigger Event)
+## Create an Order (Trigger Saga)
 
 ```bash
 curl -X POST http://localhost:3000/orders \
@@ -153,85 +146,186 @@ curl -X POST http://localhost:3000/orders \
   }'
 ```
 
-This publishes `OrderCreated` to `order_exchange`, and all three consumers receive it via their own queue bindings.
+Response:
+```json
+{
+  "status": "accepted",
+  "orderId": "uuid",
+  "sagaId": "uuid",
+  "message": "Order created, saga started"
+}
+```
+
+## Check Saga Status
+
+```bash
+curl http://localhost:3000/sagas/{sagaId}
+```
 
 ## Environment Variables
 
-Common (all services):
-
-- `RABBITMQ_URL` (default: `amqp://guest:guest@localhost:5672`)
-- `ORDER_EXCHANGE` (default: `order_exchange`)
-- `RETRY_DELAY_MS` (default: `5000`)
-- `MAX_RETRIES` (default: `3`)
-- `PREFETCH_COUNT` (default: `1`)
-- `IDEMPOTENCY_CACHE_SIZE` (default: `10000`)
-
-Order service:
-
-- `PORT` (default: `3000`)
-
-Payment service:
-
-- `PAYMENT_QUEUE` (default: `payment_queue`)
-- `PAYMENT_RETRY_QUEUE` (default: `payment_retry_queue`)
-- `PAYMENT_DLQ` (default: `payment_dlq`)
-- `PAYMENT_FAILURE_RATE` (default: `0.5`)
-- `PAYMENT_PROCESSING_MS` (default: `600`)
-
-Inventory service:
-
-- `INVENTORY_QUEUE` (default: `inventory_queue`)
-- `INVENTORY_RETRY_QUEUE` (default: `inventory_retry_queue`)
-- `INVENTORY_DLQ` (default: `inventory_dlq`)
-- `INVENTORY_PROCESSING_MS` (default: `300`)
-
-Notification service:
-
-- `NOTIFICATION_QUEUE` (default: `notification_queue`)
-- `NOTIFICATION_RETRY_QUEUE` (default: `notification_retry_queue`)
-- `NOTIFICATION_DLQ` (default: `notification_dlq`)
-- `NOTIFICATION_PROCESSING_MS` (default: `250`)
-
-## Horizontal Worker Scaling
-
-To scale a worker, run additional instances of the same service:
-
-```bash
-node payment-service/index.js
-node payment-service/index.js
-node payment-service/index.js
+### Order Service
+```
+PORT=3000
+DB_HOST=postgres-order
+DB_PORT=5432
+DB_NAME=order_db
+RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+ORDER_EXCHANGE=order.topic
+SAGA_TIMEOUT_MS=90000
+TIMEOUT_CHECK_INTERVAL_MS=10000
+OUTBOX_POLL_INTERVAL_MS=1000
 ```
 
-RabbitMQ load-balances messages across worker instances consuming the same queue.
-
-## Testing Retry Flow
-
-1. Start services.
-2. Set `PAYMENT_FAILURE_RATE=0.9` (or keep default `0.5`) for frequent failures.
-3. Submit orders.
-4. Observe logs showing:
-   - processing failure
-   - `NACK` from main queue
-   - delayed reprocessing after retry TTL
-
-## Testing DLQ Flow
-
-1. Start payment service with guaranteed failure and low retry limit:
-
-```bash
-MAX_RETRIES=2 PAYMENT_FAILURE_RATE=1 node payment-service/index.js
+### Payment Service
+```
+DB_HOST=postgres-payment
+DB_PORT=5432
+DB_NAME=payment_db
+RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+ORDER_EXCHANGE=order.topic
+PAYMENT_QUEUE=payment_queue
+PAYMENT_FAILURE_RATE=0.3
+OUTBOX_POLL_INTERVAL_MS=1000
 ```
 
-2. Submit an order.
-3. In RabbitMQ UI, inspect queue `payment_dlq` to confirm failed message landed in DLQ after retries.
+### Inventory Service
+```
+DB_HOST=postgres-inventory
+DB_PORT=5432
+DB_NAME=inventory_db
+RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+ORDER_EXCHANGE=order.topic
+INVENTORY_QUEUE=inventory_queue
+INVENTORY_FAILURE_RATE=0.2
+OUTBOX_POLL_INTERVAL_MS=1000
+```
 
-## Testing Duplicate Event Protection
+### Notification Service
+```
+RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+ORDER_EXCHANGE=order.topic
+NOTIFICATION_QUEUE=notification_queue
+```
 
-1. Submit an order and copy the event payload from logs/response.
-2. Re-publish the exact same event with the same `eventId` to `order_exchange` from RabbitMQ UI.
-3. Consumer logs should show duplicate detection and immediate ACK without reprocessing.
+## Testing Different Scenarios
 
-## Notes
+### Test Happy Path
 
-- No saga orchestration.
-- No Kafka/streaming system usage.
+```bash
+# Set low failure rates in docker-compose.yml
+PAYMENT_FAILURE_RATE=0
+INVENTORY_FAILURE_RATE=0
+
+docker compose up -d
+curl -X POST http://localhost:3000/orders \
+  -H "Content-Type: application/json" \
+  -d '{"customerEmail":"test@example.com","items":[{"sku":"A1","qty":1}],"amount":100}'
+```
+
+### Test Payment Failure
+
+```bash
+# Set high payment failure rate
+PAYMENT_FAILURE_RATE=1.0
+
+curl -X POST http://localhost:3000/orders ...
+# Should result in OrderCancelled with reason="payment_failed"
+```
+
+### Test Inventory Failure (Compensation)
+
+```bash
+# Set payment success but inventory failure
+PAYMENT_FAILURE_RATE=0
+INVENTORY_FAILURE_RATE=1.0
+
+curl -X POST http://localhost:3000/orders ...
+# Should result in PaymentRefunded → OrderCancelled with reason="compensation"
+```
+
+### Test Timeout
+
+```bash
+# Set payment processing very slow
+PAYMENT_PROCESSING_MS=120000
+
+# Or manually block payment service
+docker compose stop payment-service
+
+curl -X POST http://localhost:3000/orders ...
+# After 90 seconds, should timeout and cancel
+```
+
+## Horizontal Scaling
+
+Scale any service by running multiple instances:
+
+```bash
+docker compose up -d --scale payment-service=3
+```
+
+RabbitMQ load-balances messages across worker instances.
+
+## Implementation Notes
+
+### Outbox Pattern
+Each service with a database runs an embedded outbox worker that:
+1. Polls the `events` table for unpublished events
+2. Publishes to RabbitMQ with publisher confirms
+3. Marks events as published
+
+### Saga Timeout
+Order Service runs a timeout checker that:
+1. Polls `saga_instances` for pending sagas past `timeout_at`
+2. Writes `OrderCancelled` to outbox with reason="timeout"
+3. Updates saga status to `timeout_cancelled`
+
+### Idempotency
+All event consumers use the `processed_events` table to ensure exactly-once processing per event.
+
+### Transaction Boundaries
+All database operations within a single event handler use database transactions to ensure atomicity.
+
+## Project Structure
+
+```
+.
+├── order-service/
+│   ├── config/db.js          # Service-specific DB config
+│   ├── src/
+│   │   ├── server.js         # HTTP API + saga consumers
+│   │   ├── sagaHandler.js    # Saga state transitions
+│   │   ├── outboxWorker.js   # Embedded outbox publisher
+│   │   └── timeoutChecker.js # Saga timeout checker
+│   └── index.js
+├── payment-service/
+│   ├── config/db.js
+│   ├── src/
+│   │   ├── worker.js         # Event consumer (OrderCreated, RefundRequest)
+│   │   └── outboxWorker.js   # Embedded outbox publisher
+│   └── index.js
+├── inventory-service/
+│   ├── config/db.js
+│   ├── src/
+│   │   ├── worker.js         # Event consumer (PaymentCompleted)
+│   │   └── outboxWorker.js   # Embedded outbox publisher
+│   └── index.js
+├── notification-service/
+│   └── src/worker.js         # Event consumer (stateless)
+├── shared/
+│   ├── saga/
+│   │   ├── sagaState.js      # Saga state machine
+│   │   └── outbox.js         # Outbox helper functions
+│   └── rabbitmq/
+│       ├── topology.js       # Topic exchange setup
+│       └── consumerService.js
+└── database/migrations/
+    ├── order/001_init.sql
+    ├── payment/001_init.sql
+    └── inventory/001_init.sql
+```
+
+## License
+
+MIT

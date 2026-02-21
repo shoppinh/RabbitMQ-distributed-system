@@ -1,8 +1,7 @@
-const { pool } = require("../config/db");
-
 class DatabaseEventStore {
-  constructor(serviceName) {
+  constructor(serviceName, pool = null) {
     this.serviceName = serviceName;
+    this.pool = pool;
   }
 
   /**
@@ -11,11 +10,16 @@ class DatabaseEventStore {
    * @returns {Promise<boolean>} true if this is the first time processing (insert succeeded), false if already processed (conflict)
    */
   async tryAcquire(eventId) {
-    const client = await pool.connect();
+    const poolToUse = this.pool;
+    if (!poolToUse) {
+      throw new Error("Pool not provided to DatabaseEventStore");
+    }
+    
+    const client = await poolToUse.connect();
     try {
       const result = await client.query(
-        "INSERT INTO processed_events (event_id, service_name) VALUES ($1, $2) ON CONFLICT (event_id) DO NOTHING",
-        [eventId, this.serviceName],
+        "INSERT INTO processed_events (event_id) VALUES ($1) ON CONFLICT (event_id) DO NOTHING",
+        [eventId],
       );
       // If rowCount > 0, the insert succeeded (first time seeing this event)
       // If rowCount = 0, conflict occurred (duplicate event)

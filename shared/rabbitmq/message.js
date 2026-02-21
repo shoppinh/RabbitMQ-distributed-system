@@ -38,6 +38,27 @@ async function publishJsonConfirmed(
   });
 }
 
+/**
+ * Publish outbox event with confirmation
+ * @param {Object} channel - RabbitMQ channel
+ * @param {string} exchange - Exchange name
+ * @param {Object} event - Event from outbox table
+ */
+async function publishOutboxEventConfirmed(channel, exchange, event) {
+  const { routing_key, payload, id, type } = event;
+  
+  await publishJsonConfirmed(
+    channel,
+    exchange,
+    routing_key,
+    payload,
+    {
+      messageId: id,
+      type: type,
+    }
+  );
+}
+
 function parseJsonMessage(msg) {
   if (!msg) {
     return null;
@@ -82,6 +103,7 @@ function publishToDlq(channel, dlqQueue, msg, meta = {}) {
 module.exports = {
   publishJson,
   publishJsonConfirmed,
+  publishOutboxEventConfirmed,
   parseJsonMessage,
   getRejectCount,
   publishToDlq

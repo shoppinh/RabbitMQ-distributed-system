@@ -1,37 +1,110 @@
 services:
-  postgres:
+  postgres-order:
     image: postgres:16-alpine
-    container_name: postgres
+    container_name: postgres-order
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: orders_db
+      POSTGRES_DB: order_db
     ports:
-      - '5432:5432'
+      - '5433:5432'
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_order_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d orders_db']
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d order_db']
       interval: 10s
       timeout: 5s
       retries: 5
 
-  db-migrator:
+  postgres-payment:
+    image: postgres:16-alpine
+    container_name: postgres-payment
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: payment_db
+    ports:
+      - '5434:5432'
+    volumes:
+      - postgres_payment_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d payment_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-inventory:
+    image: postgres:16-alpine
+    container_name: postgres-inventory
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: inventory_db
+    ports:
+      - '5435:5432'
+    volumes:
+      - postgres_inventory_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d inventory_db']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db-migrator-order:
     image: node:20-alpine
-    container_name: db-migrator
+    container_name: db-migrator-order
     working_dir: /app
     depends_on:
-      postgres:
+      postgres-order:
         condition: service_healthy
     environment:
-      DB_HOST: postgres
+      DB_HOST: postgres-order
       DB_PORT: 5432
       DB_USER: postgres
       DB_PASSWORD: password
-      DB_NAME: orders_db
+      DB_NAME: order_db
+      MIGRATIONS_DIR: database/migrations/order
     volumes:
       - .:/app
-    command: sh -c "npm install --omit=dev && npm run migrate"
+    command: sh -c "npm install --omit=dev && node scripts/migrate.js"
+    restart: "no"
+
+  db-migrator-payment:
+    image: node:20-alpine
+    container_name: db-migrator-payment
+    working_dir: /app
+    depends_on:
+      postgres-payment:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres-payment
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: payment_db
+      MIGRATIONS_DIR: database/migrations/payment
+    volumes:
+      - .:/app
+    command: sh -c "npm install --omit=dev && node scripts/migrate.js"
+    restart: "no"
+
+  db-migrator-inventory:
+    image: node:20-alpine
+    container_name: db-migrator-inventory
+    working_dir: /app
+    depends_on:
+      postgres-inventory:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres-inventory
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: inventory_db
+      MIGRATIONS_DIR: database/migrations/inventory
+    volumes:
+      - .:/app
+    command: sh -c "npm install --omit=dev && node scripts/migrate.js"
     restart: "no"
 
   rabbitmq:
@@ -58,19 +131,21 @@ services:
       dockerfile: order-service/Dockerfile
     container_name: order-service
     depends_on:
-      db-migrator:
+      db-migrator-order:
         condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
     environment:
       PORT: 3000
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      ORDER_EXCHANGE: order_exchange
-      DB_HOST: postgres
+      ORDER_EXCHANGE: order.topic
+      DB_HOST: postgres-order
       DB_PORT: 5432
       DB_USER: postgres
       DB_PASSWORD: password
-      DB_NAME: orders_db
+      DB_NAME: order_db
+      SAGA_TIMEOUT_MS: 90000
+      TIMEOUT_CHECK_INTERVAL_MS: 10000
     ports:
       - '3000:3000'
     restart: unless-stopped
@@ -81,21 +156,27 @@ services:
       dockerfile: payment-service/Dockerfile
     container_name: payment-service
     depends_on:
-      db-migrator:
+      db-migrator-payment:
         condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      ORDER_EXCHANGE: order_exchange
+      ORDER_EXCHANGE: order.topic
+      DB_HOST: postgres-payment
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: payment_db
       PREFETCH_COUNT: 1
       RETRY_DELAY_MS: 5000
       MAX_RETRIES: 3
       PAYMENT_QUEUE: payment_queue
       PAYMENT_RETRY_QUEUE: payment_retry_queue
       PAYMENT_DLQ: payment_dlq
-      PAYMENT_FAILURE_RATE: 0.5
+      PAYMENT_FAILURE_RATE: 0.3
       PAYMENT_PROCESSING_MS: 600
+      OUTBOX_POLL_INTERVAL_MS: 1000
     restart: unless-stopped
 
   inventory-service:
@@ -104,13 +185,18 @@ services:
       dockerfile: inventory-service/Dockerfile
     container_name: inventory-service
     depends_on:
-      db-migrator:
+      db-migrator-inventory:
         condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      ORDER_EXCHANGE: order_exchange
+      ORDER_EXCHANGE: order.topic
+      DB_HOST: postgres-inventory
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: inventory_db
       PREFETCH_COUNT: 1
       RETRY_DELAY_MS: 5000
       MAX_RETRIES: 3
@@ -118,6 +204,7 @@ services:
       INVENTORY_RETRY_QUEUE: inventory_retry_queue
       INVENTORY_DLQ: inventory_dlq
       INVENTORY_PROCESSING_MS: 300
+      OUTBOX_POLL_INTERVAL_MS: 1000
     restart: unless-stopped
 
   notification-service:
@@ -126,13 +213,11 @@ services:
       dockerfile: notification-service/Dockerfile
     container_name: notification-service
     depends_on:
-      db-migrator:
-        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      ORDER_EXCHANGE: order_exchange
+      ORDER_EXCHANGE: order.topic
       PREFETCH_COUNT: 1
       RETRY_DELAY_MS: 5000
       MAX_RETRIES: 3
@@ -142,29 +227,8 @@ services:
       NOTIFICATION_PROCESSING_MS: 250
     restart: unless-stopped
 
-  outbox-publisher:
-    build:
-      context: .
-      dockerfile: outbox-publisher/Dockerfile
-    container_name: outbox-publisher
-    depends_on:
-      db-migrator:
-        condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    environment:
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      ORDER_EXCHANGE: order_exchange
-      OUTBOX_POLL_INTERVAL_MS: 2000
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASSWORD: password
-      DB_NAME: orders_db
-    restart: unless-stopped
-
 volumes:
   rabbitmq_data:
-  postgres_data:
+  postgres_order_data:
+  postgres_payment_data:
+  postgres_inventory_data:
