@@ -103,9 +103,10 @@ async function handlePaymentCompleted(event, client, logger, failureRate, proces
     );
 
     // Write InventoryFailed to outbox
-    await writeEventToOutbox(client, {
+  await writeEventToOutbox(client, {
       type: EventTypes.INVENTORY_FAILED,
       sagaId: event.sagaId,
+      correlationId: event.correlationId,
       orderId: event.orderId,
       payload: {
         reservationId,
@@ -135,6 +136,7 @@ async function handlePaymentCompleted(event, client, logger, failureRate, proces
   await writeEventToOutbox(client, {
     type: EventTypes.INVENTORY_RESERVED,
     sagaId: event.sagaId,
+    correlationId: event.correlationId,
     orderId: event.orderId,
     payload: {
       reservationId,

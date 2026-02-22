@@ -1,6 +1,6 @@
 // Outbox helper functions for writing events to outbox table
 
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4, validate: uuidValidate } = require('uuid');
 const { EventTypeToRoutingKey } = require('../rabbitmq/topology');
 
 /**
@@ -11,7 +11,7 @@ const { EventTypeToRoutingKey } = require('../rabbitmq/topology');
  * @param {string} eventData.sagaId - Saga ID
  * @param {string} eventData.orderId - Order ID
  * @param {Object} eventData.payload - Event payload
- * @param {string} eventData.correlationId - Optional correlation ID
+ * @param {string} eventData.correlationId - Optional trace/request ID propagated across services
  * @returns {Object} - The created event
  */
 async function writeEventToOutbox(client, eventData) {
@@ -22,6 +22,7 @@ async function writeEventToOutbox(client, eventData) {
     payload,
     correlationId = null,
   } = eventData;
+  const safeCorrelationId = correlationId && uuidValidate(correlationId) ? correlationId : null;
 
   const eventId = uuidv4();
   const routingKey = EventTypeToRoutingKey[type];
@@ -33,6 +34,8 @@ async function writeEventToOutbox(client, eventData) {
   const eventPayload = {
     eventId,
     sagaId,
+    // Optional trace identifier. Useful when one request spawns multiple sagas.
+    correlationId: safeCorrelationId,
     orderId,
     timestamp: new Date().toISOString(),
     payload,
@@ -41,7 +44,7 @@ async function writeEventToOutbox(client, eventData) {
   await client.query(
     `INSERT INTO events (id, type, payload, routing_key, saga_id, correlation_id) 
      VALUES ($1, $2, $3, $4, $5, $6)`,
-    [eventId, type, JSON.stringify(eventPayload), routingKey, sagaId, correlationId]
+    [eventId, type, JSON.stringify(eventPayload), routingKey, sagaId, safeCorrelationId]
   );
 
   return {

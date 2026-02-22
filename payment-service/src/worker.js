@@ -114,9 +114,10 @@ async function handleOrderCreated(event, client, logger, failureRate, processing
     );
 
     // Write PaymentFailed to outbox
-    await writeEventToOutbox(client, {
+  await writeEventToOutbox(client, {
       type: EventTypes.PAYMENT_FAILED,
       sagaId: event.sagaId,
+      correlationId: event.correlationId,
       orderId: event.orderId,
       payload: {
         paymentId,
@@ -145,6 +146,7 @@ async function handleOrderCreated(event, client, logger, failureRate, processing
   await writeEventToOutbox(client, {
     type: EventTypes.PAYMENT_COMPLETED,
     sagaId: event.sagaId,
+    correlationId: event.correlationId,
     orderId: event.orderId,
     payload: {
       paymentId,
@@ -201,6 +203,7 @@ async function handleRefundRequested(event, client, logger, processingMs) {
   await writeEventToOutbox(client, {
     type: EventTypes.PAYMENT_REFUNDED,
     sagaId: event.sagaId,
+    correlationId: event.correlationId,
     orderId: event.orderId,
     payload: {
       paymentId: payment.id,

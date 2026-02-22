@@ -1,5 +1,5 @@
 const express = require("express");
-const { v4: uuidv4 } = require("uuid");
+const { v4: uuidv4, validate: uuidValidate } = require("uuid");
 
 const { getCommonConfig } = require("../../shared/config/env");
 const { createChannel, closeConnection } = require("../../shared/rabbitmq/connection");
@@ -144,7 +144,12 @@ async function startServer(logger) {
     try {
       const orderId = uuidv4();
       const sagaId = uuidv4();
-      const eventId = uuidv4();
+      // Prefer upstream trace ID; otherwise create one for this request lifecycle.
+      const requestCorrelationId = req.get("x-correlation-id");
+      const correlationId =
+        requestCorrelationId && uuidValidate(requestCorrelationId)
+          ? requestCorrelationId
+          : uuidv4();
 
       const { customerId, customerEmail, items, amount, currency = "USD" } = req.body;
 
@@ -170,6 +175,7 @@ async function startServer(logger) {
       await writeEventToOutbox(client, {
         type: EventTypes.ORDER_CREATED,
         sagaId,
+        correlationId,
         orderId,
         payload: {
           customerId,
@@ -185,6 +191,7 @@ async function startServer(logger) {
       logger.info("Order created and saga started", {
         orderId,
         sagaId,
+        correlationId,
         customerId,
       });
 
@@ -192,6 +199,7 @@ async function startServer(logger) {
         status: "accepted",
         orderId,
         sagaId,
+        correlationId,
         message: "Order created, saga started",
       });
     } catch (error) {

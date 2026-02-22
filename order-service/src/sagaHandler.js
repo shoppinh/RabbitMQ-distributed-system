@@ -82,6 +82,7 @@ class SagaHandler {
       await writeEventToOutbox(client, {
         type: EventTypes.ORDER_CANCELLED,
         sagaId: event.sagaId,
+        correlationId: event.correlationId,
         orderId: event.orderId,
         payload: {
           reason: "payment_failed",
@@ -130,6 +131,7 @@ class SagaHandler {
       await writeEventToOutbox(client, {
         type: EventTypes.ORDER_CONFIRMED,
         sagaId: event.sagaId,
+        correlationId: event.correlationId,
         orderId: event.orderId,
         payload: {
           customerEmail: event.payload.customerEmail,
@@ -180,6 +182,7 @@ class SagaHandler {
       await writeEventToOutbox(client, {
         type: EventTypes.PAYMENT_REFUND_REQUESTED,
         sagaId: event.sagaId,
+        correlationId: event.correlationId,
         orderId: event.orderId,
         payload: {
           amount: event.payload.amount,
@@ -233,6 +236,7 @@ class SagaHandler {
       await writeEventToOutbox(client, {
         type: EventTypes.ORDER_CANCELLED,
         sagaId: event.sagaId,
+        correlationId: event.correlationId,
         orderId: event.orderId,
         payload: {
           reason: "compensation",
@@ -280,6 +284,8 @@ class SagaHandler {
       await writeEventToOutbox(client, {
         type: EventTypes.ORDER_CANCELLED,
         sagaId: saga.saga_id,
+        // Timeout is a system-triggered branch; use saga_id for trace continuity.
+        correlationId: saga.saga_id,
         orderId: saga.order_id,
         payload: {
           reason: "timeout",

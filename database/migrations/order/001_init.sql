@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS events (
   payload JSONB NOT NULL,
   routing_key TEXT NOT NULL,
   saga_id UUID,
+  -- Optional request/trace identifier. Can be reused across multiple sagas.
   correlation_id UUID,
   published BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

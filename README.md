@@ -56,11 +56,14 @@ All events include:
 {
   "eventId": "uuid",
   "sagaId": "uuid",
+  "correlationId": "uuid (optional)",
   "orderId": "uuid",
   "timestamp": "ISO-8601",
   "payload": { ... }
 }
 ```
+
+`sagaId` identifies the saga instance. `correlationId` is for end-to-end request tracing and may span multiple sagas.
 
 ## Routing Keys
 
@@ -137,6 +140,7 @@ You should see `[migrate] done` for each.
 ```bash
 curl -X POST http://localhost:3000/orders \
   -H "Content-Type: application/json" \
+  -H "X-Correlation-Id: 11111111-1111-1111-1111-111111111111" \
   -d '{
     "customerId": "cust-1001",
     "customerEmail": "user@example.com",
@@ -152,9 +156,12 @@ Response:
   "status": "accepted",
   "orderId": "uuid",
   "sagaId": "uuid",
+  "correlationId": "uuid",
   "message": "Order created, saga started"
 }
 ```
+
+If `X-Correlation-Id` is missing or invalid UUID, Order Service generates one and propagates it through emitted events.
 
 ## Check Saga Status
 
