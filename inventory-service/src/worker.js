@@ -96,7 +96,7 @@ async function handlePaymentCompleted(event, client, logger, failureRate, proces
   await sleep(processingMs);
 
   if (shouldFail(failureRate)) {
-    // Inventory reservation failed
+    // Inventory reservation failed — commit the failure so the outbox event is published
     await client.query(
       "UPDATE inventory_reservations SET status = $1 WHERE id = $2",
       ["failed", reservationId]
@@ -122,7 +122,7 @@ async function handlePaymentCompleted(event, client, logger, failureRate, proces
       reservationId,
     });
 
-    throw new Error("Simulated inventory reservation failure");
+    return;
   }
 
   // Inventory reserved successfully

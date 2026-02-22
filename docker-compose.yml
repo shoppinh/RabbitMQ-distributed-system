@@ -203,6 +203,7 @@ services:
       INVENTORY_QUEUE: inventory_queue
       INVENTORY_RETRY_QUEUE: inventory_retry_queue
       INVENTORY_DLQ: inventory_dlq
+      INVENTORY_FAILURE_RATE: 0.2
       INVENTORY_PROCESSING_MS: 300
       OUTBOX_POLL_INTERVAL_MS: 1000
     restart: unless-stopped
