@@ -1,3 +1,4 @@
+require("../shared/telemetry");
 const path = require("node:path");
 const dotenv = require("dotenv");
 

@@ -7,11 +7,11 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: order_db
     ports:
-      - '5433:5432'
+      - "5433:5432"
     volumes:
       - postgres_order_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d order_db']
+      test: ["CMD-SHELL", "pg_isready -U postgres -d order_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -24,11 +24,11 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: payment_db
     ports:
-      - '5434:5432'
+      - "5434:5432"
     volumes:
       - postgres_payment_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d payment_db']
+      test: ["CMD-SHELL", "pg_isready -U postgres -d payment_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -41,11 +41,11 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: inventory_db
     ports:
-      - '5435:5432'
+      - "5435:5432"
     volumes:
       - postgres_inventory_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d inventory_db']
+      test: ["CMD-SHELL", "pg_isready -U postgres -d inventory_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -112,15 +112,15 @@ services:
     container_name: rabbitmq
     hostname: rabbitmq
     ports:
-      - '5672:5672'
-      - '15672:15672'
+      - "5672:5672"
+      - "15672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ['CMD', 'rabbitmq-diagnostics', 'ping']
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -136,6 +136,8 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
+      OTEL_SERVICE_NAME: "order-service"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
       PORT: 3000
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order.topic
@@ -147,7 +149,7 @@ services:
       SAGA_TIMEOUT_MS: 90000
       TIMEOUT_CHECK_INTERVAL_MS: 10000
     ports:
-      - '3000:3000'
+      - "3000:3000"
     restart: unless-stopped
 
   payment-service:
@@ -161,6 +163,8 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
+      OTEL_SERVICE_NAME: "payment-service"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order.topic
       DB_HOST: postgres-payment
@@ -190,6 +194,8 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
+      OTEL_SERVICE_NAME: "inventory-service"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order.topic
       DB_HOST: postgres-inventory
@@ -217,6 +223,8 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
+      OTEL_SERVICE_NAME: "notification-service"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order.topic
       PREFETCH_COUNT: 1
@@ -228,8 +236,61 @@ services:
       NOTIFICATION_PROCESSING_MS: 250
     restart: unless-stopped
 
+  otel-collector:
+    image: otel/opentelemetry-collector:0.96.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./config/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317" # OTLP gRPC receiver
+      - "4318:4318" # OTLP HTTP receiver
+      - "8889:8889" # Prometheus metrics endpoint
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --enable-feature=otlp-write-receiver
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.4.0
+    container_name: tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./config/tempo.yaml:/etc/tempo.yaml
+      - tempo_data:/tmp/tempo
+    ports:
+      - "3200:3200" # Tempo
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.3.3
+    container_name: grafana
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./config/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+
 volumes:
   rabbitmq_data:
   postgres_order_data:
   postgres_payment_data:
   postgres_inventory_data:
+  prometheus_data:
+  tempo_data:
+  grafana_data:

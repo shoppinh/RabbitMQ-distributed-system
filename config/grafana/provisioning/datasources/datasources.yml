@@ -1,0 +1,19 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    url: http://prometheus:9090
+    access: proxy
+    isDefault: true
+  - name: Tempo
+    type: tempo
+    url: http://tempo:3200
+    access: proxy
+    basicAuth: false
+    isDefault: false
+    jsonData:
+      httpMethod: GET
+      tracesToLogsV2:
+        customQuery: true
+        query: '{$${__tags}} |~ "$${__trace.traceId}"'
