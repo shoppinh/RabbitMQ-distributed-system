@@ -1,0 +1,45 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # use the compose service name as the "service" label
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: service
+      # keep the container name for easy lookup
+      - source_labels: [__meta_docker_container_name]
+        regex: "/(.*)"
+        target_label: container
+      # log stream: stdout / stderr
+      - source_labels: [__meta_docker_container_log_stream]
+        target_label: stream
+      # tell promtail where to tail log files
+      - source_labels: [__meta_docker_container_log_path]
+        target_label: __path__
+
+    pipeline_stages:
+      # parse the JSON emitted by pino
+      - json:
+          expressions:
+            level: level
+            traceId: traceId
+            spanId: spanId
+            msg: msg
+      # promote level and traceId to Loki stream labels for fast querying
+      - labels:
+          level:
+          traceId:
+      # use the pino "msg" field as the final log line
+      - output:
+          source: msg

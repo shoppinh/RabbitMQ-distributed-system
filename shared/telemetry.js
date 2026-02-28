@@ -7,7 +7,7 @@ const {
 } = require("@opentelemetry/exporter-trace-otlp-grpc");
 const {
   OTLPMetricExporter,
-} = require("@opentelemetry/exporter-metrics-otlp-grpc");
+} = require("@opentelemetry/exporter-metrics-otlp-http");
 const { PeriodicExportingMetricReader } = require("@opentelemetry/sdk-metrics");
 
 const sdk = new opentelemetry.NodeSDK({

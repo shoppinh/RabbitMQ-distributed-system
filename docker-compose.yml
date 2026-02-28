@@ -138,6 +138,7 @@ services:
     environment:
       OTEL_SERVICE_NAME: "order-service"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "otel-collector:4317"
       PORT: 3000
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order.topic
@@ -165,6 +166,7 @@ services:
     environment:
       OTEL_SERVICE_NAME: "payment-service"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "otel-collector:4317"
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order.topic
       DB_HOST: postgres-payment
@@ -196,6 +198,7 @@ services:
     environment:
       OTEL_SERVICE_NAME: "inventory-service"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "otel-collector:4317"
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order.topic
       DB_HOST: postgres-inventory
@@ -225,6 +228,7 @@ services:
     environment:
       OTEL_SERVICE_NAME: "notification-service"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "otel-collector:4317"
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order.topic
       PREFETCH_COUNT: 1
@@ -272,6 +276,28 @@ services:
       - "3200:3200" # Tempo
     restart: unless-stopped
 
+  loki:
+    image: grafana/loki:3.4.1
+    container_name: loki
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./config/loki-local-config.yaml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.4.1
+    container_name: promtail
+    volumes:
+      - ./config/promtail.yaml:/etc/promtail/promtail.yaml
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: -config.file=/etc/promtail/promtail.yaml
+    depends_on:
+      - loki
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:10.3.3
     container_name: grafana
@@ -284,6 +310,10 @@ services:
       - grafana_data:/var/lib/grafana
     ports:
       - "3001:3000"
+    depends_on:
+      - loki
+      - prometheus
+      - tempo
     restart: unless-stopped
 
 volumes:
@@ -294,3 +324,4 @@ volumes:
   prometheus_data:
   tempo_data:
   grafana_data:
+  loki_data:
