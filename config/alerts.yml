@@ -1,0 +1,29 @@
+groups:
+  - name: observability-stack
+    rules:
+      - alert: OtelCollectorDown
+        expr: up{job="otel-collector"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: OpenTelemetry Collector is down
+          description: Prometheus cannot scrape otel-collector for more than 1 minute.
+
+      - alert: OtelCollectorExportFailures
+        expr: rate(otelcol_exporter_send_failed_spans[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: OTel collector is failing to export spans
+          description: Collector reported failed span exports for 5 minutes.
+
+      - alert: NoSpansReceived
+        expr: sum(rate(otelcol_receiver_accepted_spans[10m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: No traces received by OTel collector
+          description: Collector has not accepted spans for 10 minutes.

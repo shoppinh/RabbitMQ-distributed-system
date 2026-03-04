@@ -36,10 +36,9 @@ scrape_configs:
             traceId: traceId
             spanId: spanId
             msg: msg
-      # promote level and traceId to Loki stream labels for fast querying
+      # keep only low-cardinality labels to avoid stream explosion
       - labels:
           level:
-          traceId:
       # use the pino "msg" field as the final log line
       - output:
           source: msg
