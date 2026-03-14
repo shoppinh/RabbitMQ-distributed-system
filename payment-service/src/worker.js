@@ -7,13 +7,7 @@ const { writeEventToOutbox } = require("../../shared/saga/outbox");
 const { pool } = require("../config/db");
 const { parseNumber } = require("../../shared/utils/parseNumber");
 
-function shouldFail(failureRate) {
-  return Math.random() < failureRate;
-}
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 async function startWorker(logger) {
   const common = getCommonConfig("payment-service");
@@ -61,9 +55,9 @@ async function startWorker(logger) {
         const routingKey = event.routingKey || RoutingKeys.ORDER_CREATED;
 
         if (routingKey === RoutingKeys.ORDER_CREATED) {
-          await handleOrderCreated(event, client, logger, failureRate, processingMs);
+          await handleOrderCreated(event, client, logger);
         } else if (routingKey === RoutingKeys.PAYMENT_REFUND_REQUESTED) {
-          await handleRefundRequested(event, client, logger, processingMs);
+          await handleRefundRequested(event, client, logger);
         } else {
           throw new Error(`Unknown routing key: ${routingKey}`);
         }
@@ -79,20 +73,23 @@ async function startWorker(logger) {
   });
 }
 
-async function handleOrderCreated(event, client, logger, failureRate, processingMs) {
+async function handleOrderCreated(event, client, logger) {
+  const customerId = event.payload.customerId;
+
   logger.info("Processing payment for order", {
     eventId: event.eventId,
     sagaId: event.sagaId,
     orderId: event.orderId,
     amount: event.payload.amount,
     currency: event.payload.currency,
+    customerId,
   });
 
   // Record payment attempt in local state
   const paymentId = uuidv4();
   await client.query(
-    `INSERT INTO payment_transactions (id, saga_id, order_id, status, amount, currency) 
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+    `INSERT INTO payment_transactions (id, saga_id, order_id, status, amount, currency, customer_id) 
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [
       paymentId,
       event.sagaId,
@@ -100,21 +97,39 @@ async function handleOrderCreated(event, client, logger, failureRate, processing
       "pending",
       event.payload.amount,
       event.payload.currency,
+      customerId,
     ]
   );
 
-  // Simulate payment processing
-  await sleep(processingMs);
+  let success = true;
+  let reason = "";
 
-  if (shouldFail(failureRate)) {
-    // Payment failed — commit the failure so the outbox event is published
+  const res = await client.query(
+    "SELECT balance FROM customer_wallets WHERE customer_id = $1 FOR UPDATE",
+    [customerId]
+  );
+
+  if (res.rows.length === 0) {
+    success = false;
+    reason = `Customer wallet not found: ${customerId}`;
+  } else {
+    const balance = parseFloat(res.rows[0].balance);
+    const amount = parseFloat(event.payload.amount);
+
+    if (balance < amount) {
+      success = false;
+      reason = "Insufficient funds";
+    }
+  }
+
+  if (!success) {
     await client.query(
       "UPDATE payment_transactions SET status = $1, processed_at = NOW() WHERE id = $2",
       ["failed", paymentId]
     );
 
     // Write PaymentFailed to outbox
-  await writeEventToOutbox(client, {
+    await writeEventToOutbox(client, {
       type: EventTypes.PAYMENT_FAILED,
       sagaId: event.sagaId,
       correlationId: event.correlationId,
@@ -124,19 +139,25 @@ async function handleOrderCreated(event, client, logger, failureRate, processing
         amount: event.payload.amount,
         currency: event.payload.currency,
         customerEmail: event.payload.customerEmail,
-        reason: "Simulated payment gateway failure",
+        reason,
       },
     });
 
     logger.info("Payment failed, written to outbox", {
       sagaId: event.sagaId,
       paymentId,
+      reason,
     });
 
     return;
   }
 
   // Payment succeeded
+  await client.query(
+    "UPDATE customer_wallets SET balance = balance - $1, updated_at = NOW() WHERE customer_id = $2",
+    [event.payload.amount, customerId]
+  );
+
   await client.query(
     "UPDATE payment_transactions SET status = $1, processed_at = NOW() WHERE id = $2",
     ["completed", paymentId]
@@ -163,7 +184,7 @@ async function handleOrderCreated(event, client, logger, failureRate, processing
   });
 }
 
-async function handleRefundRequested(event, client, logger, processingMs) {
+async function handleRefundRequested(event, client, logger) {
   logger.info("Processing refund for order", {
     eventId: event.eventId,
     sagaId: event.sagaId,
@@ -174,8 +195,8 @@ async function handleRefundRequested(event, client, logger, processingMs) {
 
   // Find the original payment
   const paymentResult = await client.query(
-    "SELECT * FROM payment_transactions WHERE saga_id = $1 AND status = $2",
-    [event.sagaId, "completed"]
+    "SELECT * FROM payment_transactions WHERE saga_id = $1 AND status = 'completed' FOR UPDATE",
+    [event.sagaId]
   );
 
   if (paymentResult.rowCount === 0) {
@@ -190,8 +211,13 @@ async function handleRefundRequested(event, client, logger, processingMs) {
     ["refunding", payment.id]
   );
 
-  // Simulate refund processing
-  await sleep(processingMs);
+  // Add funds back to wallet
+  if (payment.customer_id) {
+    await client.query(
+      "UPDATE customer_wallets SET balance = balance + $1, updated_at = NOW() WHERE customer_id = $2",
+      [payment.amount, payment.customer_id]
+    );
+  }
 
   // Update payment status to refunded
   await client.query(

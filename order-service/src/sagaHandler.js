@@ -9,6 +9,57 @@ class SagaHandler {
     this.logger = logger;
   }
 
+  async handleInventoryReserved(event) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const processed = await client.query(
+        "SELECT 1 FROM processed_events WHERE event_id = $1",
+        [event.eventId]
+      );
+      if (processed.rowCount > 0) {
+        this.logger.warn("Duplicate event, skipping", { eventId: event.eventId });
+        await client.query("COMMIT");
+        return;
+      }
+
+      await client.query(
+        "INSERT INTO processed_events (event_id) VALUES ($1)",
+        [event.eventId]
+      );
+
+      // Update saga status to confirmed
+      await this.sagaManager.updateSagaStatus(event.sagaId, SagaStatus.CONFIRMED);
+      await this.sagaManager.updateSagaStep(event.sagaId, SagaSteps.INVENTORY_RESERVED);
+
+      // Write OrderConfirmed to outbox
+      await writeEventToOutbox(client, {
+        type: EventTypes.ORDER_CONFIRMED,
+        sagaId: event.sagaId,
+        correlationId: event.correlationId,
+        orderId: event.orderId,
+        payload: {
+          customerEmail: event.payload.customerEmail,
+          items: event.payload.items,
+          amount: event.payload.amount,
+          currency: event.payload.currency,
+        },
+      });
+
+      await client.query("COMMIT");
+      this.logger.info("InventoryReserved handled, order confirmed", {
+        sagaId: event.sagaId,
+        orderId: event.orderId,
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async handlePaymentCompleted(event) {
     const client = await this.pool.connect();
     try {
@@ -78,7 +129,7 @@ class SagaHandler {
 
       await this.sagaManager.updateSagaStep(event.sagaId, SagaSteps.PAYMENT_FAILED);
 
-      // Write OrderCancelled to outbox
+      // Write OrderCancelled to outbox so Inventory gets released
       await writeEventToOutbox(client, {
         type: EventTypes.ORDER_CANCELLED,
         sagaId: event.sagaId,
@@ -92,57 +143,6 @@ class SagaHandler {
 
       await client.query("COMMIT");
       this.logger.info("PaymentFailed handled, order cancelled", {
-        sagaId: event.sagaId,
-        orderId: event.orderId,
-      });
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async handleInventoryReserved(event) {
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
-
-      const processed = await client.query(
-        "SELECT 1 FROM processed_events WHERE event_id = $1",
-        [event.eventId]
-      );
-      if (processed.rowCount > 0) {
-        this.logger.warn("Duplicate event, skipping", { eventId: event.eventId });
-        await client.query("COMMIT");
-        return;
-      }
-
-      await client.query(
-        "INSERT INTO processed_events (event_id) VALUES ($1)",
-        [event.eventId]
-      );
-
-      // Update saga status to confirmed
-      await this.sagaManager.updateSagaStatus(event.sagaId, SagaStatus.CONFIRMED);
-      await this.sagaManager.updateSagaStep(event.sagaId, SagaSteps.INVENTORY_RESERVED);
-
-      // Write OrderConfirmed to outbox
-      await writeEventToOutbox(client, {
-        type: EventTypes.ORDER_CONFIRMED,
-        sagaId: event.sagaId,
-        correlationId: event.correlationId,
-        orderId: event.orderId,
-        payload: {
-          customerEmail: event.payload.customerEmail,
-          items: event.payload.items,
-          amount: event.payload.amount,
-          currency: event.payload.currency,
-        },
-      });
-
-      await client.query("COMMIT");
-      this.logger.info("InventoryReserved handled, order confirmed", {
         sagaId: event.sagaId,
         orderId: event.orderId,
       });
@@ -188,6 +188,7 @@ class SagaHandler {
           amount: event.payload.amount,
           currency: event.payload.currency,
           reason: "inventory_reservation_failed",
+          customerEmail: event.payload.customerEmail,
         },
       });
 

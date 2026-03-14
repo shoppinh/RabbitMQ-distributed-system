@@ -2,12 +2,11 @@ const express = require("express");
 const { v4: uuidv4, validate: uuidValidate } = require("uuid");
 
 const { getCommonConfig } = require("../../shared/config/env");
-const { createChannel, closeConnection } = require("../../shared/rabbitmq/connection");
+const { closeConnection } = require("../../shared/rabbitmq/connection");
 const { pool } = require("../config/db");
 const { writeEventToOutbox } = require("../../shared/saga/outbox");
 const { SagaStateManager } = require("../../shared/saga/sagaState");
-const { SagaHandler } = require("./sagaHandler");
-const { RoutingKeys, EventTypes } = require("../../shared/rabbitmq/topology");
+const { EventTypes } = require("../../shared/rabbitmq/topology");
 const { parseNumber } = require("../../shared/utils/parseNumber");
 
 const SAGA_TIMEOUT_MS = parseNumber(process.env.SAGA_TIMEOUT_MS, 90000);
@@ -18,115 +17,9 @@ async function startServer(logger) {
 
   const config = getCommonConfig("order-service");
   const port = Number(process.env.PORT || 3000);
-  const exchangeName = process.env.ORDER_EXCHANGE || "order.topic";
 
   // Initialize saga components
   const sagaManager = new SagaStateManager(pool);
-  const sagaHandler = new SagaHandler(pool, sagaManager, logger);
-
-  // Create RabbitMQ channel for consumers
-  const channel = await createChannel({
-    rabbitmqUrl: config.rabbitmqUrl,
-    logger,
-    serviceName: config.serviceName,
-  });
-
-  // Setup consumer queues for saga events
-  const consumerQueue = "order_service_queue";
-  const retryQueue = "order_service_retry_queue";
-  const dlqQueue = "order_service_dlq";
-  const retryDelayMs = parseNumber(process.env.RETRY_DELAY_MS, 5000);
-
-  // Assert queues
-  await channel.assertQueue(consumerQueue, {
-    durable: true,
-    arguments: {
-      "x-dead-letter-exchange": "",
-      "x-dead-letter-routing-key": retryQueue,
-    },
-  });
-
-  await channel.assertQueue(retryQueue, {
-    durable: true,
-    arguments: {
-      "x-message-ttl": retryDelayMs,
-      "x-dead-letter-exchange": "",
-      "x-dead-letter-routing-key": consumerQueue,
-    },
-  });
-
-  await channel.assertQueue(dlqQueue, { durable: true });
-
-  // Assert topic exchange
-  await channel.assertExchange(exchangeName, "topic", { durable: true });
-
-  // Bind to saga event routing keys
-  const routingKeys = [
-    RoutingKeys.PAYMENT_COMPLETED,
-    RoutingKeys.PAYMENT_FAILED,
-    RoutingKeys.INVENTORY_RESERVED,
-    RoutingKeys.INVENTORY_FAILED,
-    RoutingKeys.PAYMENT_REFUNDED,
-  ];
-
-  for (const routingKey of routingKeys) {
-    await channel.bindQueue(consumerQueue, exchangeName, routingKey);
-  }
-
-  await channel.prefetch(1);
-
-  // Start consuming saga events
-  channel.consume(
-    consumerQueue,
-    async (msg) => {
-      if (!msg) return;
-
-      try {
-        const event = JSON.parse(msg.content.toString());
-        const routingKey = msg.fields.routingKey;
-
-        logger.info("Received saga event", {
-          eventId: event.eventId,
-          sagaId: event.sagaId,
-          routingKey,
-        });
-
-        // Route to appropriate handler based on routing key
-        switch (routingKey) {
-          case RoutingKeys.PAYMENT_COMPLETED:
-            await sagaHandler.handlePaymentCompleted(event);
-            break;
-          case RoutingKeys.PAYMENT_FAILED:
-            await sagaHandler.handlePaymentFailed(event);
-            break;
-          case RoutingKeys.INVENTORY_RESERVED:
-            await sagaHandler.handleInventoryReserved(event);
-            break;
-          case RoutingKeys.INVENTORY_FAILED:
-            await sagaHandler.handleInventoryFailed(event);
-            break;
-          case RoutingKeys.PAYMENT_REFUNDED:
-            await sagaHandler.handlePaymentRefunded(event);
-            break;
-          default:
-            logger.warn("Unknown routing key", { routingKey });
-        }
-
-        channel.ack(msg);
-      } catch (error) {
-        logger.error("Failed to process saga event", {
-          error: error.message,
-        });
-        channel.nack(msg, false, false);
-      }
-    },
-    { noAck: false }
-  );
-
-  logger.info("Order service saga consumer started", {
-    queue: consumerQueue,
-    routingKeys,
-  });
 
   // Health check endpoint
   app.get("/health", (_, res) => {
@@ -242,6 +135,34 @@ async function startServer(logger) {
     }
   });
 
+  // Get customer orders endpoint
+  app.get("/orders/customer/:customerId", async (req, res) => {
+    try {
+      const query = `
+        SELECT o.id as order_id, o.items, o.amount, o.currency, o.created_at, s.status as saga_status, s.current_step
+        FROM orders o
+        LEFT JOIN saga_instances s ON o.id = s.order_id
+        WHERE o.customer_id = $1
+        ORDER BY o.created_at DESC
+      `;
+      const result = await pool.query(query, [req.params.customerId]);
+
+      res.json({
+        status: "ok",
+        orders: result.rows,
+      });
+    } catch (error) {
+      logger.error("Failed to get customer orders", {
+        customerId: req.params.customerId,
+        error: error.message,
+      });
+      res.status(500).json({
+        status: "error",
+        message: error.message,
+      });
+    }
+  });
+
   const server = app.listen(port, () => {
     logger.info("Order service HTTP server listening", { port });
   });
@@ -249,7 +170,6 @@ async function startServer(logger) {
   const shutdown = async () => {
     logger.warn("Order service shutdown requested");
     server.close(async () => {
-      await channel.close();
       await closeConnection(logger, config.serviceName);
       await pool.end();
       process.exit(0);

@@ -50,6 +50,23 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres-notification:
+    image: postgres:16-alpine
+    container_name: postgres-notification
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: notification_db
+    ports:
+      - "5436:5432"
+    volumes:
+      - postgres_notification_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d notification_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   db-migrator-order:
     image: node:20-alpine
     container_name: db-migrator-order
@@ -102,6 +119,25 @@ services:
       DB_PASSWORD: password
       DB_NAME: inventory_db
       MIGRATIONS_DIR: database/migrations/inventory
+    volumes:
+      - .:/app
+    command: sh -c "npm install --omit=dev && node scripts/migrate.js"
+    restart: "no"
+
+  db-migrator-notification:
+    image: node:20-alpine
+    container_name: db-migrator-notification
+    working_dir: /app
+    depends_on:
+      postgres-notification:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres-notification
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: notification_db
+      MIGRATIONS_DIR: database/migrations/notification
     volumes:
       - .:/app
     command: sh -c "npm install --omit=dev && node scripts/migrate.js"
@@ -229,6 +265,8 @@ services:
       dockerfile: notification-service/Dockerfile
     container_name: notification-service
     depends_on:
+      db-migrator-notification:
+        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
       otel-collector:
@@ -239,6 +277,11 @@ services:
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "otel-collector:4317"
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       ORDER_EXCHANGE: order.topic
+      DB_HOST: postgres-notification
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: notification_db
       PREFETCH_COUNT: 1
       RETRY_DELAY_MS: 5000
       MAX_RETRIES: 3
@@ -331,6 +374,7 @@ volumes:
   postgres_order_data:
   postgres_payment_data:
   postgres_inventory_data:
+  postgres_notification_data:
   prometheus_data:
   tempo_data:
   grafana_data:

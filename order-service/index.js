@@ -8,20 +8,24 @@ const { createLogger } = require("../shared/utils/logger");
 const { startServer } = require("./src/server");
 const { startOutboxWorker } = require("./src/outboxWorker");
 const { startTimeoutChecker } = require("./src/timeoutChecker");
+const { startWorker } = require("./src/worker");
 
 const serviceName = "order-service";
 const logger = createLogger(serviceName);
 
 async function main() {
   logger.info("Starting Order Service", {
-    components: ["http-server", "outbox-worker", "timeout-checker"],
+    components: ["http-server", "worker", "outbox-worker", "timeout-checker"],
   });
 
-  // Start all three components in parallel
-  // They share the same process but are independent
+  // Start HTTP and other components in parallel
   await Promise.all([
     startServer(logger).catch((err) => {
       logger.error("HTTP server failed", { error: err.message });
+      process.exit(1);
+    }),
+    startWorker(logger).catch((err) => {
+      logger.error("Worker failed", { error: err.message });
       process.exit(1);
     }),
     startOutboxWorker(logger).catch((err) => {
