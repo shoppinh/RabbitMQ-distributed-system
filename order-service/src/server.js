@@ -163,6 +163,80 @@ async function startServer(logger) {
     }
   });
 
+  // Manual refund endpoint
+  app.post("/orders/:id/refund", async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const orderId = req.params.id;
+      const { reason = "Customer requested manual refund" } = req.body;
+
+      await client.query("BEGIN");
+
+      // Verify order and saga
+      const result = await client.query(
+        "SELECT o.*, s.saga_id, s.status as saga_status FROM orders o JOIN saga_instances s ON o.id = s.order_id WHERE o.id = $1 FOR UPDATE",
+        [orderId]
+      );
+
+      if (result.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ status: "error", message: "Order not found" });
+      }
+
+      const order = result.rows[0];
+
+      if (order.saga_status !== "confirmed") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ status: "error", message: `Cannot refund order in status: ${order.saga_status}` });
+      }
+
+      // Update saga status to refunding
+      await sagaManager.updateSagaStatus(order.saga_id, "refunding");
+
+      const correlationId = uuidv4();
+
+      // Write PaymentRefundRequested to outbox
+      await writeEventToOutbox(client, {
+        type: EventTypes.PAYMENT_REFUND_REQUESTED,
+        sagaId: order.saga_id,
+        correlationId: correlationId,
+        orderId: order.id,
+        payload: {
+          amount: order.amount,
+          currency: order.currency,
+          customerEmail: order.customer_email,
+          reason,
+        },
+      });
+
+      await client.query("COMMIT");
+
+      logger.info("Manual refund requested", {
+        orderId,
+        sagaId: order.saga_id,
+        reason,
+      });
+
+      res.status(202).json({
+        status: "accepted",
+        message: "Refund requested successfully",
+        orderId,
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      logger.error("Failed to request manual refund", {
+        orderId: req.params.id,
+        error: error.message,
+      });
+      res.status(500).json({
+        status: "error",
+        message: error.message,
+      });
+    } finally {
+      client.release();
+    }
+  });
+
   const server = app.listen(port, () => {
     logger.info("Order service HTTP server listening", { port });
   });

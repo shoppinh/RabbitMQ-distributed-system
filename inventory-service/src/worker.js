@@ -80,6 +80,18 @@ async function handleOrderCreated(event, client, logger) {
     items: event.payload.items,
   });
 
+  const existing = await client.query(
+    "SELECT id FROM inventory_reservations WHERE saga_id = $1",
+    [event.sagaId],
+  );
+  if (existing.rowCount > 0) {
+    logger.info(
+      "Inventory saga already processed or cancelled, ignoring order created",
+      { sagaId: event.sagaId },
+    );
+    return;
+  }
+
   const items = event.payload.items || [];
   let success = true;
   let failReason = "";
@@ -164,9 +176,24 @@ async function handleOrderCreated(event, client, logger) {
 }
 
 async function handleOrderCancelled(event, client, logger) {
+  // Check if reservation even exists
+  const existing = await client.query(
+    "SELECT id FROM inventory_reservations WHERE saga_id = $1 FOR UPDATE",
+    [event.sagaId],
+  );
+  if (existing.rowCount === 0) {
+    // Insert dummy record to protect against late ORDER_CREATED
+    await client.query(
+      `INSERT INTO inventory_reservations (id, saga_id, order_id, sku, qty, status) 
+       VALUES ($1, $2, $3, $4, $5, 'released')`,
+      [uuidv4(), event.sagaId, event.orderId, "N/A", 0],
+    );
+    return;
+  }
+
   // Find all reservations, group by sku and lock them
   const res = await client.query(
-    "SELECT id, sku, qty, status FROM inventory_reservations WHERE saga_id = $1 AND status = 'reserved' ORDER BY sku FOR UPDATE ",
+    "SELECT id, sku, qty, status FROM inventory_reservations WHERE saga_id = $1 AND status = 'reserved' ORDER BY sku FOR UPDATE",
     [event.sagaId],
   );
 

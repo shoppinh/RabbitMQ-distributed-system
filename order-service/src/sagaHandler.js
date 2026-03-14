@@ -1,4 +1,4 @@
-const { writeEventToOutbox, markEventAsProcessed } = require("../../shared/saga/outbox");
+const { writeEventToOutbox } = require("../../shared/saga/outbox");
 const { SagaStatus, SagaSteps } = require("../../shared/saga/sagaState");
 const { EventTypes } = require("../../shared/rabbitmq/topology");
 
@@ -16,42 +16,63 @@ class SagaHandler {
 
       const processed = await client.query(
         "SELECT 1 FROM processed_events WHERE event_id = $1",
-        [event.eventId]
+        [event.eventId],
       );
       if (processed.rowCount > 0) {
-        this.logger.warn("Duplicate event, skipping", { eventId: event.eventId });
+        this.logger.warn("Duplicate event, skipping", {
+          eventId: event.eventId,
+        });
         await client.query("COMMIT");
         return;
       }
 
       await client.query(
         "INSERT INTO processed_events (event_id) VALUES ($1)",
-        [event.eventId]
+        [event.eventId],
       );
 
-      // Update saga status to confirmed
-      await this.sagaManager.updateSagaStatus(event.sagaId, SagaStatus.CONFIRMED);
-      await this.sagaManager.updateSagaStep(event.sagaId, SagaSteps.INVENTORY_RESERVED);
+      const sagaRes = await client.query(
+        "SELECT status, current_step FROM saga_instances WHERE saga_id = $1 FOR UPDATE",
+        [event.sagaId],
+      );
+      const saga = sagaRes.rows[0];
 
-      // Write OrderConfirmed to outbox
-      await writeEventToOutbox(client, {
-        type: EventTypes.ORDER_CONFIRMED,
-        sagaId: event.sagaId,
-        correlationId: event.correlationId,
-        orderId: event.orderId,
-        payload: {
-          customerEmail: event.payload.customerEmail,
-          items: event.payload.items,
-          amount: event.payload.amount,
-          currency: event.payload.currency,
-        },
-      });
+      if (saga && saga.status !== SagaStatus.CANCELLED) {
+        if (saga.current_step === SagaSteps.PAYMENT_COMPLETED) {
+          // Both are completed!
+          await this.sagaManager.updateSagaStatus(
+            event.sagaId,
+            SagaStatus.CONFIRMED,
+          );
+
+          await writeEventToOutbox(client, {
+            type: EventTypes.ORDER_CONFIRMED,
+            sagaId: event.sagaId,
+            correlationId: event.correlationId,
+            orderId: event.orderId,
+            payload: {
+              customerEmail: event.payload.customerEmail,
+              items: event.payload.items,
+              amount: event.payload.amount,
+              currency: event.payload.currency,
+            },
+          });
+          this.logger.info("Both Payment and Inventory done, order confirmed", {
+            sagaId: event.sagaId,
+          });
+        } else {
+          // Update partial step
+          await this.sagaManager.updateSagaStep(
+            event.sagaId,
+            SagaSteps.INVENTORY_RESERVED,
+          );
+          this.logger.info("Inventory reserved, waiting for payment", {
+            sagaId: event.sagaId,
+          });
+        }
+      }
 
       await client.query("COMMIT");
-      this.logger.info("InventoryReserved handled, order confirmed", {
-        sagaId: event.sagaId,
-        orderId: event.orderId,
-      });
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -65,39 +86,107 @@ class SagaHandler {
     try {
       await client.query("BEGIN");
 
-      // Check if already processed
       const processed = await client.query(
         "SELECT 1 FROM processed_events WHERE event_id = $1",
-        [event.eventId]
+        [event.eventId],
       );
       if (processed.rowCount > 0) {
-        this.logger.warn("Duplicate event, skipping", { eventId: event.eventId });
+        this.logger.warn("Duplicate event, skipping", {
+          eventId: event.eventId,
+        });
         await client.query("COMMIT");
         return;
       }
 
-      // Mark as processed
       await client.query(
         "INSERT INTO processed_events (event_id) VALUES ($1)",
-        [event.eventId]
+        [event.eventId],
       );
 
-      // Update saga step
-      await this.sagaManager.updateSagaStep(event.sagaId, SagaSteps.PAYMENT_COMPLETED);
+      const sagaRes = await client.query(
+        "SELECT status, current_step FROM saga_instances WHERE saga_id = $1 FOR UPDATE",
+        [event.sagaId],
+      );
+      const saga = sagaRes.rows[0];
 
-      // No event to publish - wait for InventoryReserved
-      
+      if (saga && saga.status !== SagaStatus.CANCELLED) {
+        if (saga.current_step === SagaSteps.INVENTORY_RESERVED) {
+          // Both are completed!
+          await this.sagaManager.updateSagaStatus(
+            event.sagaId,
+            SagaStatus.CONFIRMED,
+          );
+
+          await writeEventToOutbox(client, {
+            type: EventTypes.ORDER_CONFIRMED,
+            sagaId: event.sagaId,
+            correlationId: event.correlationId,
+            orderId: event.orderId,
+            payload: {
+              customerEmail: event.payload.customerEmail,
+              items: event.payload.items,
+              amount: event.payload.amount,
+              currency: event.payload.currency,
+            },
+          });
+          this.logger.info("Both Payment and Inventory done, order confirmed", {
+            sagaId: event.sagaId,
+          });
+        } else {
+          // Update partial step
+          await this.sagaManager.updateSagaStep(
+            event.sagaId,
+            SagaSteps.PAYMENT_COMPLETED,
+          );
+          this.logger.info("Payment completed, waiting for inventory", {
+            sagaId: event.sagaId,
+          });
+        }
+      }
+
       await client.query("COMMIT");
-      this.logger.info("PaymentCompleted handled, waiting for inventory", {
-        sagaId: event.sagaId,
-        orderId: event.orderId,
-      });
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
     } finally {
       client.release();
     }
+  }
+
+  async ensureSagaCancelled(client, event, reason, step) {
+    const sagaRes = await client.query(
+      "SELECT status FROM saga_instances WHERE saga_id = $1 FOR UPDATE",
+      [event.sagaId],
+    );
+    if (
+      sagaRes.rowCount > 0 &&
+      sagaRes.rows[0].status === SagaStatus.CANCELLED
+    ) {
+      return; // Already cancelled
+    }
+
+    await this.sagaManager.updateSagaStatus(
+      event.sagaId,
+      SagaStatus.CANCELLED,
+      reason,
+    );
+    await this.sagaManager.updateSagaStep(event.sagaId, step);
+
+    await writeEventToOutbox(client, {
+      type: EventTypes.ORDER_CANCELLED,
+      sagaId: event.sagaId,
+      correlationId: event.correlationId,
+      orderId: event.orderId,
+      payload: {
+        reason: reason,
+        customerEmail: event.payload.customerEmail,
+      },
+    });
+
+    this.logger.info("Saga cancelled due to failure", {
+      sagaId: event.sagaId,
+      reason,
+    });
   }
 
   async handlePaymentFailed(event) {
@@ -107,45 +196,25 @@ class SagaHandler {
 
       const processed = await client.query(
         "SELECT 1 FROM processed_events WHERE event_id = $1",
-        [event.eventId]
+        [event.eventId],
       );
       if (processed.rowCount > 0) {
-        this.logger.warn("Duplicate event, skipping", { eventId: event.eventId });
         await client.query("COMMIT");
         return;
       }
-
       await client.query(
         "INSERT INTO processed_events (event_id) VALUES ($1)",
-        [event.eventId]
+        [event.eventId],
       );
 
-      // Update saga status
-      await this.sagaManager.updateSagaStatus(
-        event.sagaId,
-        SagaStatus.CANCELLED,
-        "Payment failed"
+      await this.ensureSagaCancelled(
+        client,
+        event,
+        "Payment failed",
+        SagaSteps.PAYMENT_FAILED,
       );
-
-      await this.sagaManager.updateSagaStep(event.sagaId, SagaSteps.PAYMENT_FAILED);
-
-      // Write OrderCancelled to outbox so Inventory gets released
-      await writeEventToOutbox(client, {
-        type: EventTypes.ORDER_CANCELLED,
-        sagaId: event.sagaId,
-        correlationId: event.correlationId,
-        orderId: event.orderId,
-        payload: {
-          reason: "payment_failed",
-          customerEmail: event.payload.customerEmail,
-        },
-      });
 
       await client.query("COMMIT");
-      this.logger.info("PaymentFailed handled, order cancelled", {
-        sagaId: event.sagaId,
-        orderId: event.orderId,
-      });
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -161,42 +230,28 @@ class SagaHandler {
 
       const processed = await client.query(
         "SELECT 1 FROM processed_events WHERE event_id = $1",
-        [event.eventId]
+        [event.eventId],
       );
       if (processed.rowCount > 0) {
-        this.logger.warn("Duplicate event, skipping", { eventId: event.eventId });
+        this.logger.warn("Duplicate event, skipping", {
+          eventId: event.eventId,
+        });
         await client.query("COMMIT");
         return;
       }
-
       await client.query(
         "INSERT INTO processed_events (event_id) VALUES ($1)",
-        [event.eventId]
+        [event.eventId],
       );
 
-      // Update saga status to refunding
-      await this.sagaManager.updateSagaStatus(event.sagaId, SagaStatus.REFUNDING);
-      await this.sagaManager.updateSagaStep(event.sagaId, SagaSteps.INVENTORY_FAILED);
-
-      // Write PaymentRefundRequested to outbox
-      await writeEventToOutbox(client, {
-        type: EventTypes.PAYMENT_REFUND_REQUESTED,
-        sagaId: event.sagaId,
-        correlationId: event.correlationId,
-        orderId: event.orderId,
-        payload: {
-          amount: event.payload.amount,
-          currency: event.payload.currency,
-          reason: "inventory_reservation_failed",
-          customerEmail: event.payload.customerEmail,
-        },
-      });
+      await this.ensureSagaCancelled(
+        client,
+        event,
+        "Inventory reservation failed",
+        SagaSteps.INVENTORY_FAILED,
+      );
 
       await client.query("COMMIT");
-      this.logger.info("InventoryFailed handled, refund requested", {
-        sagaId: event.sagaId,
-        orderId: event.orderId,
-      });
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -212,42 +267,29 @@ class SagaHandler {
 
       const processed = await client.query(
         "SELECT 1 FROM processed_events WHERE event_id = $1",
-        [event.eventId]
+        [event.eventId],
       );
       if (processed.rowCount > 0) {
-        this.logger.warn("Duplicate event, skipping", { eventId: event.eventId });
+        this.logger.warn("Duplicate event, skipping", {
+          eventId: event.eventId,
+        });
         await client.query("COMMIT");
         return;
       }
 
       await client.query(
         "INSERT INTO processed_events (event_id) VALUES ($1)",
-        [event.eventId]
+        [event.eventId],
       );
 
-      // Update saga status to cancelled
-      await this.sagaManager.updateSagaStatus(
+      // No need to cancel the saga again, it is already cancelled. Let's just update the internal step trace.
+      await this.sagaManager.updateSagaStep(
         event.sagaId,
-        SagaStatus.CANCELLED,
-        "Payment refunded after inventory failure"
+        SagaSteps.PAYMENT_REFUNDED,
       );
-      await this.sagaManager.updateSagaStep(event.sagaId, SagaSteps.PAYMENT_REFUNDED);
-
-      // Write OrderCancelled to outbox
-      await writeEventToOutbox(client, {
-        type: EventTypes.ORDER_CANCELLED,
-        sagaId: event.sagaId,
-        correlationId: event.correlationId,
-        orderId: event.orderId,
-        payload: {
-          reason: "compensation",
-          refundAmount: event.payload.amount,
-          customerEmail: event.payload.customerEmail,
-        },
-      });
 
       await client.query("COMMIT");
-      this.logger.info("PaymentRefunded handled, order cancelled with refund", {
+      this.logger.info("PaymentRefunded handled, compensation completed", {
         sagaId: event.sagaId,
         orderId: event.orderId,
       });
@@ -278,7 +320,7 @@ class SagaHandler {
       await this.sagaManager.updateSagaStatus(
         saga.saga_id,
         SagaStatus.TIMEOUT_CANCELLED,
-        "Saga timeout after 90 seconds"
+        "Saga timeout after 90 seconds",
       );
 
       // Write OrderCancelled to outbox

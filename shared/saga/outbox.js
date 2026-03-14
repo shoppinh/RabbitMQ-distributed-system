@@ -1,7 +1,7 @@
 // Outbox helper functions for writing events to outbox table
 
-const { v4: uuidv4, validate: uuidValidate } = require('uuid');
-const { EventTypeToRoutingKey } = require('../rabbitmq/topology');
+const { v4: uuidv4, validate: uuidValidate } = require("uuid");
+const { EventTypeToRoutingKey } = require("../rabbitmq/topology");
 
 /**
  * Write an event to the outbox table
@@ -15,18 +15,13 @@ const { EventTypeToRoutingKey } = require('../rabbitmq/topology');
  * @returns {Object} - The created event
  */
 async function writeEventToOutbox(client, eventData) {
-  const {
-    type,
-    sagaId,
-    orderId,
-    payload,
-    correlationId = null,
-  } = eventData;
-  const safeCorrelationId = correlationId && uuidValidate(correlationId) ? correlationId : null;
+  const { type, sagaId, orderId, payload, correlationId = null } = eventData;
+  const safeCorrelationId =
+    correlationId && uuidValidate(correlationId) ? correlationId : null;
 
   const eventId = uuidv4();
   const routingKey = EventTypeToRoutingKey[type];
-  
+
   if (!routingKey) {
     throw new Error(`Unknown event type: ${type}`);
   }
@@ -44,7 +39,14 @@ async function writeEventToOutbox(client, eventData) {
   await client.query(
     `INSERT INTO events (id, type, payload, routing_key, saga_id, correlation_id) 
      VALUES ($1, $2, $3, $4, $5, $6)`,
-    [eventId, type, JSON.stringify(eventPayload), routingKey, sagaId, safeCorrelationId]
+    [
+      eventId,
+      type,
+      JSON.stringify(eventPayload),
+      routingKey,
+      sagaId,
+      safeCorrelationId,
+    ],
   );
 
   return {
@@ -55,34 +57,6 @@ async function writeEventToOutbox(client, eventData) {
   };
 }
 
-/**
- * Check if an event has already been processed (idempotency)
- * @param {Object} client - Database client
- * @param {string} eventId - Event ID to check
- * @returns {boolean}
- */
-async function isEventProcessed(client, eventId) {
-  const result = await client.query(
-    'SELECT 1 FROM processed_events WHERE event_id = $1',
-    [eventId]
-  );
-  return result.rowCount > 0;
-}
-
-/**
- * Mark an event as processed (idempotency)
- * @param {Object} client - Database client (must be in a transaction)
- * @param {string} eventId - Event ID to mark
- */
-async function markEventAsProcessed(client, eventId) {
-  await client.query(
-    'INSERT INTO processed_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING',
-    [eventId]
-  );
-}
-
 module.exports = {
   writeEventToOutbox,
-  isEventProcessed,
-  markEventAsProcessed,
 };

@@ -43,7 +43,11 @@ async function startWorker(logger) {
     prefetchCount: common.prefetchCount,
     maxRetries: common.maxRetries,
     eventStore,
-    routingKeys: [RoutingKeys.ORDER_CREATED, RoutingKeys.PAYMENT_REFUND_REQUESTED],
+    routingKeys: [
+      RoutingKeys.ORDER_CREATED,
+      RoutingKeys.ORDER_CANCELLED,
+      RoutingKeys.PAYMENT_REFUND_REQUESTED,
+    ],
     processEvent: async (event, context) => {
       const { logger } = context;
       const client = await pool.connect();
@@ -56,8 +60,11 @@ async function startWorker(logger) {
 
         if (routingKey === RoutingKeys.ORDER_CREATED) {
           await handleOrderCreated(event, client, logger);
-        } else if (routingKey === RoutingKeys.PAYMENT_REFUND_REQUESTED) {
-          await handleRefundRequested(event, client, logger);
+        } else if (
+          routingKey === RoutingKeys.ORDER_CANCELLED ||
+          routingKey === RoutingKeys.PAYMENT_REFUND_REQUESTED
+        ) {
+          await handleCancellationOrRefund(event, client, logger);
         } else {
           throw new Error(`Unknown routing key: ${routingKey}`);
         }
@@ -84,6 +91,12 @@ async function handleOrderCreated(event, client, logger) {
     currency: event.payload.currency,
     customerId,
   });
+
+  const existing = await client.query("SELECT id FROM payment_transactions WHERE saga_id = $1", [event.sagaId]);
+  if (existing.rowCount > 0) {
+    logger.info("Payment saga already processed or cancelled, ignoring order created", { sagaId: event.sagaId });
+    return;
+  }
 
   // Record payment attempt in local state
   const paymentId = uuidv4();
@@ -184,26 +197,35 @@ async function handleOrderCreated(event, client, logger) {
   });
 }
 
-async function handleRefundRequested(event, client, logger) {
-  logger.info("Processing refund for order", {
+async function handleCancellationOrRefund(event, client, logger) {
+  logger.info("Processing cancellation/refund for order", {
     eventId: event.eventId,
     sagaId: event.sagaId,
     orderId: event.orderId,
-    amount: event.payload.amount,
     reason: event.payload.reason,
   });
 
   // Find the original payment
   const paymentResult = await client.query(
-    "SELECT * FROM payment_transactions WHERE saga_id = $1 AND status = 'completed' FOR UPDATE",
+    "SELECT * FROM payment_transactions WHERE saga_id = $1 FOR UPDATE",
     [event.sagaId]
   );
 
   if (paymentResult.rowCount === 0) {
-    throw new Error(`No completed payment found for saga ${event.sagaId}`);
+    // Payment hasn't processed. Insert an early cancel record so handleOrderCreated ignores it.
+    await client.query(
+      `INSERT INTO payment_transactions (id, saga_id, order_id, status, amount, currency) 
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [uuidv4(), event.sagaId, event.orderId, "cancelled", 0, "USD"]
+    );
+    return;
   }
 
   const payment = paymentResult.rows[0];
+  if (payment.status !== "completed") {
+    // It failed, is pending, or is already cancelled/refunded.
+    return;
+  }
 
   // Update payment status to refunding
   await client.query(
