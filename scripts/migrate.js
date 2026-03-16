@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Pool } = require("pg");
 
-const { parseNumber } = require("../shared/utils/parseNumber");
+
 
 function getMigrationFiles(dirPath) {
   if (!fs.existsSync(dirPath)) {
@@ -22,7 +22,7 @@ async function main() {
 
   const pool = new Pool({
     host: process.env.DB_HOST || "localhost",
-    port: parseNumber(process.env.DB_PORT, 5432),
+    port: parseInt(process.env.DB_PORT || "5432", 10),
     user: process.env.DB_USER || "postgres",
     password: process.env.DB_PASSWORD || "password",
     database: process.env.DB_NAME || "orders_db",

@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS products (
   sku VARCHAR(50) PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive'))
+  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
   description TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
