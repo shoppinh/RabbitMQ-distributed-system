@@ -2,13 +2,20 @@
   "name": "rabbitmq-order-processing-system",
   "version": "1.0.0",
   "private": true,
-  "description": "Event-driven Order Processing System with Node.js and RabbitMQ",
+  "description": "Event-driven Order Processing System with Node.js, TypeScript and RabbitMQ",
   "scripts": {
     "migrate": "node scripts/migrate.js",
-    "start:order": "node order-service/index.js",
-    "start:payment": "node payment-service/index.js",
-    "start:inventory": "node inventory-service/index.js",
-    "start:notification": "node notification-service/index.js"
+    "build": "tsc --project tsconfig.json",
+    "build:watch": "tsc --project tsconfig.json --watch",
+    "type-check": "tsc --project tsconfig.json --noEmit",
+    "start:order": "node dist/order-service/index.js",
+    "start:payment": "node dist/payment-service/index.js",
+    "start:inventory": "node dist/inventory-service/index.js",
+    "start:notification": "node dist/notification-service/index.js",
+    "dev:order": "tsx order-service/index.ts",
+    "dev:payment": "tsx payment-service/index.ts",
+    "dev:inventory": "tsx inventory-service/index.ts",
+    "dev:notification": "tsx notification-service/index.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
@@ -20,8 +27,19 @@
     "amqplib": "^0.10.4",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "ioredis": "^5.6.1",
     "pg": "^8.18.0",
     "pino": "^10.3.1",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.7",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.14.0",
+    "@types/pg": "^8.11.11",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
   }
 }

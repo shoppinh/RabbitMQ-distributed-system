@@ -161,6 +161,20 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   order-service:
     build:
       context: .
@@ -170,6 +184,8 @@ services:
       db-migrator-order:
         condition: service_completed_successfully
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       otel-collector:
         condition: service_started
@@ -187,6 +203,8 @@ services:
       DB_NAME: order_db
       SAGA_TIMEOUT_MS: 90000
       TIMEOUT_CHECK_INTERVAL_MS: 10000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     ports:
       - "3000:3000"
     restart: unless-stopped
@@ -371,6 +389,7 @@ services:
 
 volumes:
   rabbitmq_data:
+  redis_data:
   postgres_order_data:
   postgres_payment_data:
   postgres_inventory_data:
